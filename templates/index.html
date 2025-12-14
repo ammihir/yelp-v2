@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>TasteLens Chat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- ========== CHAT SCREEN ========== -->
+    <div id="chat-screen" class="screen active">
+    <header class="app-header app-header--grid">
+      <div class="header-left">
+        <div class="header-brand">
+          <div class="app-title">TasteLens</div>
+          <div class="yelp-center">
+            <img src="{{ url_for('static', filename='img/yelp-logo.png') }}" alt="Yelp" />
+            <span>Powered by Yelp</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-center"></div>
+
+      <div class="header-right">
+        <button id="go-live-btn" class="header-btn">Live Scan</button>
+      </div>
+    </header>
+
+
+      <main id="chat-container" class="chat-container">
+        <!-- Messages go here -->
+      </main>
+
+      <form id="chat-form" class="chat-input-bar">
+        <button type="button" id="attach-btn" class="attach-btn">+</button>
+
+        <!-- Hidden file input for camera/gallery -->
+        <input
+          id="image-input"
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+        />
+
+        <input
+          id="chat-input"
+          class="chat-input"
+          type="text"
+          placeholder="Send a message..."
+          autocomplete="off"
+          required
+        />
+        <button class="chat-send-btn" type="submit">➤</button>
+      </form>
+    </div>
+
+
+<!-- ========== LIVE VIDEO SCREEN ========== -->
+    <div id="live-screen" class="screen">
+    <header class="app-header app-header--grid">
+      <div class="header-left">
+        <button id="back-to-chat-btn" class="header-btn">←</button>
+      </div>
+
+      <div class="header-center">
+        <div class="app-title">Live Scan</div>
+        <div class="yelp-center">
+          <img src="{{ url_for('static', filename='img/yelp-logo.png') }}" alt="Yelp" />
+          <span>Powered by Yelp</span>
+        </div>
+      </div>
+
+      <div class="header-right"></div>
+    </header>
+
+
+      <main class="live-container">
+        <video id="live-video" class="live-video" autoplay playsinline muted></video>
+        
+        <div class="live-mask"></div>
+
+        <!-- Curved frame overlay -->
+        
+        <div id="live-frame" class="live-frame">
+          <svg class="neon-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <!-- Soft neon glow -->
+              <filter id="neonGlow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="2.2" result="blur"/>
+                <feMerge>
+                  <feMergeNode in="blur"/>
+                  <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+              </filter>
+
+              <!-- A base gradient so it looks like a strip, not flat -->
+              <linearGradient id="neonGrad" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stop-color="#ff2d55"/>
+                <stop offset="50%" stop-color="#00e5ff"/>
+                <stop offset="100%" stop-color="#b026ff"/>
+              </linearGradient>
+            </defs>
+
+            <!-- One continuous “tube” around the frame -->
+            <rect class="neon-rect" x="3" y="3" width="94" height="94" rx="18" ry="18" fill="none"/>
+          </svg>
+        </div>
+
+
+
+        <!-- Overlay UI on top of video -->
+        <div class="live-overlay">
+          <div class="live-instructions">
+            Align a storefront inside the frame and tap “Scan”.
+          </div>
+
+          <button id="live-scan-btn" class="scan-btn">
+            Scan inside frame
+          </button>
+
+          <div id="live-result-card" class="live-result-card hidden">
+          <div class="live-result-title">
+            Rating & reviews <span class="ai-badge">AI summary</span>
+          </div>
+            <div id="live-result-text" class="live-result-text"></div>
+            <button id="live-view-more-btn" class="live-view-more-btn">
+              View more in chat
+            </button>
+          </div>
+        </div>
+      </main>
+    </div>
+
+
+  </div>
+
+  <script>
+    // ---------- DOM Elements ----------
+    const chatScreen = document.getElementById("chat-screen");
+    const liveScreen = document.getElementById("live-screen");
+    const goLiveBtn = document.getElementById("go-live-btn");
+    const backToChatBtn = document.getElementById("back-to-chat-btn");
+
+    const form = document.getElementById("chat-form");
+    const input = document.getElementById("chat-input");
+    const chatContainer = document.getElementById("chat-container");
+    const attachBtn = document.getElementById("attach-btn");
+    const imageInput = document.getElementById("image-input");
+
+    const liveVideo = document.getElementById("live-video");
+    let videoStream = null;
+
+
+
+    
+    // ---------- Message helpers ----------
+    function appendMessage(text, role, extraClass) {
+      const msg = document.createElement("div");
+      msg.classList.add("message");
+      if (role === "user") msg.classList.add("message-user");
+      else msg.classList.add("message-bot");
+      if (extraClass) msg.classList.add(extraClass);
+      msg.textContent = text;
+      chatContainer.appendChild(msg);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    // ---------- Location ----------
+    function refreshLocation() {
+      return new Promise((resolve) => {
+        if (!("geolocation" in navigator)) {
+          resolve();
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            fetch("/update_location", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                lat: pos.coords.latitude,
+                lon: pos.coords.longitude,
+              }),
+            })
+              .catch(console.error)
+              .finally(resolve);
+          },
+          (err) => {
+            console.warn("Geolocation error:", err);
+            resolve();
+          },
+          { enableHighAccuracy: true }
+        );
+      });
+    }
+
+    // Initial location push (optional)
+    refreshLocation().catch(console.error);
+
+    // ---------- Chat submit ----------
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text) return;
+
+  appendMessage(text, "user");
+  input.value = "";
+  input.focus();
+
+  await refreshLocation();
+
+  const typingBubble = document.createElement("div");
+  typingBubble.classList.add("message", "message-bot", "typing");
+  typingBubble.textContent = "Thinking…";
+  chatContainer.appendChild(typingBubble);
+  chatContainer.scrollTop = chatContainer.scrollHeight;
+
+  try {
+    // ✅ Only inject context if you actually have a live scan result
+    if (lastLiveResultJson) {
+      await fetch("/inject_context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ card: lastLiveResultJson }),
+      });
+    }
+
+    // ✅ THIS is the real chat call
+    const res = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text }),
+    });
+
+    const data = await res.json();
+    chatContainer.removeChild(typingBubble);
+
+    appendMessage(data.reply || data.error || "No reply", "bot");
+  } catch (err) {
+    chatContainer.removeChild(typingBubble);
+    appendMessage("Error talking to server.", "bot");
+    console.error(err);
+  }
+});
+
+
+    // ---------- Image upload ----------
+    attachBtn.addEventListener("click", () => {
+      imageInput.click();
+    });
+
+    imageInput.addEventListener("change", async () => {
+      if (!imageInput.files || !imageInput.files[0]) return;
+      const file = imageInput.files[0];
+
+      // Show a thumbnail bubble like ChatGPT
+      const reader = new FileReader();
+      reader.onload = () => {
+        const wrapper = document.createElement("div");
+        wrapper.classList.add("message", "message-user", "image-message");
+
+        const img = document.createElement("img");
+        img.src = reader.result;
+        wrapper.appendChild(img);
+
+        chatContainer.appendChild(wrapper);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      };
+      reader.readAsDataURL(file);
+
+      // Update location before sending
+      await refreshLocation();
+
+      const typingBubble = document.createElement("div");
+      typingBubble.classList.add("message", "message-bot", "typing");
+      typingBubble.textContent = "Analyzing image…";
+      chatContainer.appendChild(typingBubble);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+
+      const formData = new FormData();
+      formData.append("image", file);
+
+      try {
+        const res = await fetch("/upload_image", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+        chatContainer.removeChild(typingBubble);
+        appendMessage(data.reply || "Image received.", "bot");
+      } catch (err) {
+        chatContainer.removeChild(typingBubble);
+        appendMessage("Error uploading image.", "bot");
+        console.error(err);
+      } finally {
+        imageInput.value = "";
+      }
+    });
+
+    // ---------- Live video (AR-like) ----------
+    async function startVideoStream() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("Camera not supported on this device/browser.");
+        return;
+      }
+      try {
+        videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: false,
+        });
+        liveVideo.srcObject = videoStream;
+      } catch (err) {
+        console.error("Error starting video:", err);
+        alert("Could not start camera.");
+      }
+    }
+
+    function stopVideoStream() {
+      if (videoStream) {
+        videoStream.getTracks().forEach((t) => t.stop());
+        videoStream = null;
+      }
+      liveVideo.srcObject = null;
+    }
+
+    function showChatScreen() {
+      chatScreen.classList.add("active");
+      liveScreen.classList.remove("active");
+    }
+
+    function showLiveScreen() {
+      liveScreen.classList.add("active");
+      chatScreen.classList.remove("active");
+    }
+
+    goLiveBtn.addEventListener("click", async () => {
+      showLiveScreen();
+      await startVideoStream();
+      // Optional: refresh location on entering live view
+      refreshLocation().catch(console.error);
+    });
+
+    backToChatBtn.addEventListener("click", () => {
+      stopVideoStream();
+      showChatScreen();
+    });
+
+    window.addEventListener("load", () => {
+      input.focus();
+    });
+
+const liveScanBtn = document.getElementById("live-scan-btn");
+const liveResultCard = document.getElementById("live-result-card");
+const liveResultText = document.getElementById("live-result-text");
+const liveViewMoreBtn = document.getElementById("live-view-more-btn");
+const liveFrame = document.getElementById("live-frame");
+
+let lastLiveResultJson = null;
+
+// Tap the frame to scan
+liveFrame.addEventListener("click", () => liveScanBtn.click());
+
+async function captureFrameFromVideo() {
+  if (!liveVideo || !liveVideo.videoWidth || !liveVideo.videoHeight) {
+    throw new Error("Video not ready");
+  }
+
+  const vw = liveVideo.videoWidth;
+  const vh = liveVideo.videoHeight;
+
+  const frameWidthRatio = 0.7;
+  const frameHeightRatio = 0.4;
+  const frameTopRatio = 0.2;
+
+  const sw = vw * frameWidthRatio;
+  const sh = vh * frameHeightRatio;
+  const sx = (vw - sw) / 2;
+  const sy = vh * frameTopRatio;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.floor(sw);
+  canvas.height = Math.floor(sh);
+
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(liveVideo, sx, sy, sw, sh, 0, 0, sw, sh);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error("Failed to create blob"))),
+      "image/jpeg",
+      0.9
+    );
+  });
+}
+
+liveScanBtn.addEventListener("click", async () => {
+  await refreshLocation();
+
+  liveScanBtn.disabled = true;
+  liveScanBtn.textContent = "Scanning…";
+  liveFrame.classList.add("scanning");
+
+
+  try {
+    const blob = await captureFrameFromVideo();
+    const formData = new FormData();
+    formData.append("image", blob, "live_frame.jpg");
+
+    const res = await fetch("/live_scan", { method: "POST", body: formData });
+    const data = await res.json();
+
+    if (data.error) {
+      lastLiveResultJson = null;
+      liveResultText.textContent = data.error;
+      liveResultCard.classList.remove("hidden");
+      return;
+    }
+
+    lastLiveResultJson = data;
+
+    const enriched = data.enriched;
+    const top = data.top_pick;
+    const aiText = data.yelp_ai?.text;
+
+    if (enriched) {
+      const ratingLine =
+        `⭐ ${enriched.rating ?? "—"} (${enriched.review_count ?? "—"})` +
+        (enriched.price ? ` • ${enriched.price}` : "");
+      const oneLiner = enriched.ai_summary?.one_liner ? `\n${enriched.ai_summary.one_liner}` : "";
+      liveResultText.textContent = `${enriched.name}\n${ratingLine}${oneLiner}`;
+    } else if (top) {
+      const ratingLine =
+        `⭐ ${top.rating ?? "—"} (${top.review_count ?? "—"})` +
+        (top.price ? ` • ${top.price}` : "");
+      liveResultText.textContent = `${top.name}\n${ratingLine}` + (aiText ? `\n\n🤖 ${aiText}` : "");
+    } else {
+      liveResultText.textContent = aiText || "No matching businesses found.";
+    }
+
+    liveResultCard.classList.remove("hidden");
+  } catch (err) {
+    console.error("Live scan error:", err);
+    lastLiveResultJson = null;
+    liveResultText.textContent = "Error analyzing this view.";
+    liveResultCard.classList.remove("hidden");
+  } finally {
+    liveScanBtn.disabled = false;
+    liveScanBtn.textContent = "Scan inside frame";
+    liveFrame.classList.remove("scanning");
+
+  }
+});
+liveViewMoreBtn.addEventListener("click", async () => {
+  if (lastLiveResultJson) {
+    const enriched = lastLiveResultJson.enriched;
+    const top = lastLiveResultJson.top_pick;
+    const aiText = lastLiveResultJson.yelp_ai?.text;
+
+    const lines = [];
+    lines.push("📍 Live Scan Result");
+
+    if (enriched) {
+      lines.push(enriched.name);
+      lines.push(`⭐ ${enriched.rating ?? "—"} (${enriched.review_count ?? "—"})${enriched.price ? " • " + enriched.price : ""}`);
+      if (enriched.ai_summary?.one_liner) lines.push(`🧠 ${enriched.ai_summary.one_liner}`);
+    } else if (top) {
+      lines.push(top.name);
+      lines.push(`⭐ ${top.rating ?? "—"} (${top.review_count ?? "—"})${top.price ? " • " + top.price : ""}`);
+    } else {
+      lines.push("No top match found.");
+    }
+
+    if (aiText) {
+      lines.push("");
+      lines.push(aiText);
+    }
+
+    // 1) Add to UI chat
+    appendMessage(lines.join("\n"), "bot");
+
+    // 2) Inject into Yelp context (so followups know what was scanned)
+    try {
+      await fetch("/inject_context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ card: lastLiveResultJson }),
+      });
+    } catch (e) {
+      console.error("Failed to inject context:", e);
+    }}
+
+
+  stopVideoStream();
+  showChatScreen();
+});
+
+
+
+
+
+  </script>
+</body>
+</html>
