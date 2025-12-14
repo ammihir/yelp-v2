@@ -514,19 +514,6 @@ def live_scan():
             pass
 
 
-# @app.route("/inject_context", methods=["POST"])
-# def inject_context():
-#     """
-#     ✅ Reliable: store last scanned place server-side
-#     (no Yelp call here, so it can’t “break Yelp AI”)
-#     """
-#     data = request.get_json(silent=True) or {}
-#     card = data.get("card")
-#     if not isinstance(card, dict):
-#         return jsonify({"error": "missing_card"}), 400
-
-#     session["last_place"] = card
-#     return jsonify({"status": "ok", "stored": True})
 
 
 
@@ -572,3 +559,25 @@ if __name__ == "__main__":
 
 
 
+
+
+
+
+
+
+
+
+
+# @app.route("/inject_context", methods=["POST"])
+# def inject_context():
+#     """
+#     ✅ Reliable: store last scanned place server-side
+#     (no Yelp call here, so it can’t “break Yelp AI”)
+#     """
+#     data = request.get_json(silent=True) or {}
+#     card = data.get("card")
+#     if not isinstance(card, dict):
+#         return jsonify({"error": "missing_card"}), 400
+
+#     session["last_place"] = card
+#     return jsonify({"status": "ok", "stored": True})
