@@ -26,11 +26,27 @@ if not YELP_API_KEY:
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-only-change-me")
 
-# dev-safe: works on localhost + adhoc https
-app.config.update(
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=False,  # set True only on real HTTPS domain
-)
+
+# # dev-safe: works on localhost + adhoc https
+# app.config.update(
+#     SESSION_COOKIE_SAMESITE="Lax",
+#     SESSION_COOKIE_SECURE=False,  # set True only on real HTTPS domain
+# )
+
+
+is_prod = bool(os.getenv("RENDER")) or bool(os.getenv("DYNO")) # set app config based on local/prod env
+
+
+if is_prod and app.secret_key == "dev-only-change-me":
+    raise RuntimeError("Set FLASK_SECRET_KEY in Render/Heroku env vars")
+
+
+if is_prod:
+    app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=True)
+else:
+    app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=False)
+
+
 # app.config["MAX_CONTENT_LENGTH"] = 6 * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 app.config["UPLOAD_FOLDER"] = "uploads"
@@ -553,31 +569,18 @@ def inject_context():
 
 
 
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5000, debug=True, ssl_context="adhoc")
+
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True, ssl_context="adhoc")
+    debug = os.getenv("FLASK_DEBUG") == "1"
+    port = int(os.getenv("PORT", "5000"))
+    if debug: # run local
+        app.run(host="0.0.0.0", port=port, debug=True, ssl_context="adhoc")
+    else: # for render/heroku
+        app.run(host="0.0.0.0", port=port, debug=False)
 
 
 
-
-
-
-
-
-
-
-
-
-
-# @app.route("/inject_context", methods=["POST"])
-# def inject_context():
-#     """
-#     ✅ Reliable: store last scanned place server-side
-#     (no Yelp call here, so it can’t “break Yelp AI”)
-#     """
-#     data = request.get_json(silent=True) or {}
-#     card = data.get("card")
-#     if not isinstance(card, dict):
-#         return jsonify({"error": "missing_card"}), 400
-
-#     session["last_place"] = card
-#     return jsonify({"status": "ok", "stored": True})
