@@ -97,6 +97,167 @@ YELP_FUSION_SEARCH_URL = "https://api.yelp.com/v3/businesses/search"
 YELP_FUSION_BIZ_URL = "https://api.yelp.com/v3/businesses"
 YELP_FUSION_REVIEWS_URL = "https://api.yelp.com/v3/businesses/{id}/reviews"
 
+# -------------------- GROUP CHAT (IN-MEMORY) --------------------
+# Structure: { group_id: { name, created_at, members: {user_id: {nickname, joined_at}}, messages: [...], restaurants: [...] } }
+GROUPS = {}
+GROUP_MAX_MESSAGES = 100  # Keep last N messages per group
+GROUP_CLEANUP_HOURS = 24  # Auto-delete groups older than this
+
+
+def generate_group_id():
+    """Generate a short, shareable group ID."""
+    return uuid.uuid4().hex[:8]
+
+
+def generate_user_id():
+    """Generate a unique user ID for a session."""
+    return uuid.uuid4().hex[:12]
+
+
+def cleanup_old_groups():
+    """Remove groups older than GROUP_CLEANUP_HOURS."""
+    cutoff = time.time() - (GROUP_CLEANUP_HOURS * 3600)
+    to_delete = [gid for gid, g in GROUPS.items() if g.get("created_at", 0) < cutoff]
+    for gid in to_delete:
+        del GROUPS[gid]
+
+
+def get_group(group_id):
+    """Get group by ID, returns None if not found."""
+    return GROUPS.get(group_id)
+
+
+def create_group(name, creator_nickname):
+    """Create a new group and return group_id and creator's user_id."""
+    group_id = generate_group_id()
+    user_id = generate_user_id()
+
+    GROUPS[group_id] = {
+        "name": name,
+        "created_at": time.time(),
+        "members": {
+            user_id: {
+                "nickname": creator_nickname,
+                "joined_at": time.time(),
+                "is_creator": True,
+            }
+        },
+        "messages": [],
+        "restaurants": [],
+    }
+
+    # Add system message
+    GROUPS[group_id]["messages"].append({
+        "id": uuid.uuid4().hex[:8],
+        "type": "system",
+        "text": f"{creator_nickname} created the group",
+        "timestamp": time.time(),
+    })
+
+    return group_id, user_id
+
+
+def join_group(group_id, nickname):
+    """Join an existing group, returns user_id or None if group not found."""
+    group = get_group(group_id)
+    if not group:
+        return None
+
+    # Check if nickname already taken in this group
+    for member in group["members"].values():
+        if member["nickname"].lower() == nickname.lower():
+            return None  # Nickname taken
+
+    user_id = generate_user_id()
+    group["members"][user_id] = {
+        "nickname": nickname,
+        "joined_at": time.time(),
+        "is_creator": False,
+    }
+
+    # Add system message
+    group["messages"].append({
+        "id": uuid.uuid4().hex[:8],
+        "type": "system",
+        "text": f"{nickname} joined the group",
+        "timestamp": time.time(),
+    })
+
+    return user_id
+
+
+def add_group_message(group_id, user_id, text):
+    """Add a chat message to a group."""
+    group = get_group(group_id)
+    if not group or user_id not in group["members"]:
+        return None
+
+    member = group["members"][user_id]
+    msg = {
+        "id": uuid.uuid4().hex[:8],
+        "type": "chat",
+        "user_id": user_id,
+        "nickname": member["nickname"],
+        "text": text,
+        "timestamp": time.time(),
+    }
+
+    group["messages"].append(msg)
+
+    # Trim old messages
+    if len(group["messages"]) > GROUP_MAX_MESSAGES:
+        group["messages"] = group["messages"][-GROUP_MAX_MESSAGES:]
+
+    return msg
+
+
+def share_restaurant_to_group(group_id, user_id, restaurant_data):
+    """Share a restaurant recommendation to a group."""
+    group = get_group(group_id)
+    if not group or user_id not in group["members"]:
+        return None
+
+    member = group["members"][user_id]
+
+    # Add restaurant to group's list if not already there
+    biz_id = restaurant_data.get("business_id") or restaurant_data.get("id")
+    existing_ids = [r.get("business_id") for r in group["restaurants"]]
+
+    if biz_id and biz_id not in existing_ids:
+        group["restaurants"].append({
+            "business_id": biz_id,
+            "name": restaurant_data.get("name"),
+            "rating": restaurant_data.get("rating"),
+            "review_count": restaurant_data.get("review_count"),
+            "price": restaurant_data.get("price"),
+            "url": restaurant_data.get("url"),
+            "image_url": restaurant_data.get("image_url"),
+            "categories": restaurant_data.get("categories"),
+            "location": restaurant_data.get("location"),
+            "shared_by": member["nickname"],
+            "shared_at": time.time(),
+            "votes": [],  # For future voting feature
+        })
+
+    # Add message about the share
+    msg = {
+        "id": uuid.uuid4().hex[:8],
+        "type": "restaurant_share",
+        "user_id": user_id,
+        "nickname": member["nickname"],
+        "restaurant": {
+            "business_id": biz_id,
+            "name": restaurant_data.get("name"),
+            "rating": restaurant_data.get("rating"),
+            "price": restaurant_data.get("price"),
+            "url": restaurant_data.get("url"),
+        },
+        "timestamp": time.time(),
+    }
+
+    group["messages"].append(msg)
+    return msg
+
 
 @app.before_request
 def reset_session_if_server_restarted():
@@ -1044,6 +1205,346 @@ def speech_to_text():
             os.remove(save_path)
         except Exception:
             pass
+
+
+# -------------------- GROUP CHAT ENDPOINTS --------------------
+@app.route("/group/create", methods=["POST"])
+def create_group_endpoint():
+    """Create a new group and return group_id + shareable link."""
+    data = request.get_json(silent=True) or {}
+    group_name = (data.get("name") or "").strip()
+    nickname = (data.get("nickname") or "").strip()
+
+    if not group_name:
+        return jsonify({"error": "Group name is required"}), 400
+    if not nickname:
+        return jsonify({"error": "Nickname is required"}), 400
+    if len(group_name) > 50:
+        return jsonify({"error": "Group name too long (max 50 chars)"}), 400
+    if len(nickname) > 20:
+        return jsonify({"error": "Nickname too long (max 20 chars)"}), 400
+
+    # Cleanup old groups periodically
+    if uuid.uuid4().int % 5 == 0:
+        cleanup_old_groups()
+
+    group_id, user_id = create_group(group_name, nickname)
+
+    # Store user's group membership in session
+    session["group_id"] = group_id
+    session["group_user_id"] = user_id
+    session["group_nickname"] = nickname
+
+    return jsonify({
+        "status": "ok",
+        "group_id": group_id,
+        "user_id": user_id,
+        "group_name": group_name,
+        "nickname": nickname,
+        "share_link": f"/group/{group_id}",
+    })
+
+
+@app.route("/group/<group_id>/join", methods=["POST"])
+def join_group_endpoint(group_id):
+    """Join an existing group with a nickname."""
+    data = request.get_json(silent=True) or {}
+    nickname = (data.get("nickname") or "").strip()
+
+    if not nickname:
+        return jsonify({"error": "Nickname is required"}), 400
+    if len(nickname) > 20:
+        return jsonify({"error": "Nickname too long (max 20 chars)"}), 400
+
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    user_id = join_group(group_id, nickname)
+    if not user_id:
+        return jsonify({"error": "Nickname already taken in this group"}), 400
+
+    # Store user's group membership in session
+    session["group_id"] = group_id
+    session["group_user_id"] = user_id
+    session["group_nickname"] = nickname
+
+    return jsonify({
+        "status": "ok",
+        "group_id": group_id,
+        "user_id": user_id,
+        "group_name": group["name"],
+        "nickname": nickname,
+        "member_count": len(group["members"]),
+    })
+
+
+@app.route("/group/<group_id>/info", methods=["GET"])
+def group_info(group_id):
+    """Get group info (name, members, restaurants)."""
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    members = [
+        {"nickname": m["nickname"], "is_creator": m.get("is_creator", False)}
+        for m in group["members"].values()
+    ]
+
+    return jsonify({
+        "group_id": group_id,
+        "name": group["name"],
+        "members": members,
+        "member_count": len(members),
+        "restaurants": group["restaurants"],
+        "restaurant_count": len(group["restaurants"]),
+    })
+
+
+@app.route("/group/<group_id>/messages", methods=["GET"])
+def get_group_messages(group_id):
+    """Poll for new messages. Use ?since=timestamp to get only new messages."""
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    since = request.args.get("since", type=float, default=0)
+
+    # Filter messages newer than 'since'
+    messages = [m for m in group["messages"] if m["timestamp"] > since]
+
+    # Get current user info from session
+    current_user_id = session.get("group_user_id")
+
+    return jsonify({
+        "messages": messages,
+        "count": len(messages),
+        "current_user_id": current_user_id,
+        "members": [m["nickname"] for m in group["members"].values()],
+    })
+
+
+@app.route("/group/<group_id>/send", methods=["POST"])
+def send_group_message(group_id):
+    """Send a message to the group."""
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    user_id = session.get("group_user_id")
+    if not user_id or user_id not in group["members"]:
+        return jsonify({"error": "Not a member of this group"}), 403
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+
+    if not text:
+        return jsonify({"error": "Message cannot be empty"}), 400
+    if len(text) > 1000:
+        return jsonify({"error": "Message too long (max 1000 chars)"}), 400
+
+    msg = add_group_message(group_id, user_id, text)
+    if not msg:
+        return jsonify({"error": "Failed to send message"}), 500
+
+    return jsonify({"status": "ok", "message": msg})
+
+
+@app.route("/group/<group_id>/share_restaurant", methods=["POST"])
+def share_restaurant_endpoint(group_id):
+    """Share a restaurant to the group."""
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    user_id = session.get("group_user_id")
+    if not user_id or user_id not in group["members"]:
+        return jsonify({"error": "Not a member of this group"}), 403
+
+    data = request.get_json(silent=True) or {}
+    restaurant = data.get("restaurant")
+
+    if not restaurant or not isinstance(restaurant, dict):
+        return jsonify({"error": "Restaurant data required"}), 400
+
+    biz_id = restaurant.get("business_id") or restaurant.get("id")
+    if not biz_id:
+        return jsonify({"error": "Restaurant must have a business_id"}), 400
+
+    msg = share_restaurant_to_group(group_id, user_id, restaurant)
+    if not msg:
+        return jsonify({"error": "Failed to share restaurant"}), 500
+
+    return jsonify({
+        "status": "ok",
+        "message": msg,
+        "restaurants": group["restaurants"],
+    })
+
+
+@app.route("/group/<group_id>/restaurants", methods=["GET"])
+def get_group_restaurants(group_id):
+    """Get list of shared restaurants in the group."""
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    return jsonify({
+        "restaurants": group["restaurants"],
+        "count": len(group["restaurants"]),
+    })
+
+
+@app.route("/group/<group_id>/leave", methods=["POST"])
+def leave_group(group_id):
+    """Leave a group."""
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    user_id = session.get("group_user_id")
+    if not user_id or user_id not in group["members"]:
+        return jsonify({"error": "Not a member of this group"}), 403
+
+    nickname = group["members"][user_id]["nickname"]
+    del group["members"][user_id]
+
+    # Add leave message
+    group["messages"].append({
+        "id": uuid.uuid4().hex[:8],
+        "type": "system",
+        "text": f"{nickname} left the group",
+        "timestamp": time.time(),
+    })
+
+    # Clear session
+    session.pop("group_id", None)
+    session.pop("group_user_id", None)
+    session.pop("group_nickname", None)
+
+    return jsonify({"status": "ok"})
+
+
+@app.route("/group/<group_id>/vote", methods=["POST"])
+def vote_restaurant(group_id):
+    """Vote for a restaurant in the group."""
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    user_id = session.get("group_user_id")
+    if not user_id or user_id not in group["members"]:
+        return jsonify({"error": "Not a member of this group"}), 403
+
+    data = request.get_json(silent=True) or {}
+    business_id = (data.get("business_id") or "").strip()
+
+    if not business_id:
+        return jsonify({"error": "business_id required"}), 400
+
+    # Find the restaurant
+    restaurant = None
+    for r in group["restaurants"]:
+        if r.get("business_id") == business_id:
+            restaurant = r
+            break
+
+    if not restaurant:
+        return jsonify({"error": "Restaurant not found in group"}), 404
+
+    # Get user's nickname for the vote record
+    nickname = group["members"][user_id]["nickname"]
+
+    # Initialize votes list if needed
+    if "votes" not in restaurant:
+        restaurant["votes"] = []
+
+    # Check if already voted
+    existing_vote = None
+    for v in restaurant["votes"]:
+        if v.get("user_id") == user_id:
+            existing_vote = v
+            break
+
+    if existing_vote:
+        return jsonify({"error": "Already voted for this restaurant"}), 400
+
+    # Add vote
+    restaurant["votes"].append({
+        "user_id": user_id,
+        "nickname": nickname,
+        "timestamp": time.time(),
+    })
+
+    # Add system message about the vote
+    group["messages"].append({
+        "id": uuid.uuid4().hex[:8],
+        "type": "system",
+        "text": f"{nickname} voted for {restaurant['name']}",
+        "timestamp": time.time(),
+    })
+
+    return jsonify({
+        "status": "ok",
+        "restaurant": restaurant,
+        "vote_count": len(restaurant["votes"]),
+        "restaurants": group["restaurants"],
+    })
+
+
+@app.route("/group/<group_id>/unvote", methods=["POST"])
+def unvote_restaurant(group_id):
+    """Remove vote for a restaurant in the group."""
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    user_id = session.get("group_user_id")
+    if not user_id or user_id not in group["members"]:
+        return jsonify({"error": "Not a member of this group"}), 403
+
+    data = request.get_json(silent=True) or {}
+    business_id = (data.get("business_id") or "").strip()
+
+    if not business_id:
+        return jsonify({"error": "business_id required"}), 400
+
+    # Find the restaurant
+    restaurant = None
+    for r in group["restaurants"]:
+        if r.get("business_id") == business_id:
+            restaurant = r
+            break
+
+    if not restaurant:
+        return jsonify({"error": "Restaurant not found in group"}), 404
+
+    # Remove vote
+    if "votes" not in restaurant:
+        restaurant["votes"] = []
+
+    original_count = len(restaurant["votes"])
+    restaurant["votes"] = [v for v in restaurant["votes"] if v.get("user_id") != user_id]
+
+    if len(restaurant["votes"]) == original_count:
+        return jsonify({"error": "You haven't voted for this restaurant"}), 400
+
+    return jsonify({
+        "status": "ok",
+        "restaurant": restaurant,
+        "vote_count": len(restaurant["votes"]),
+        "restaurants": group["restaurants"],
+    })
+
+
+@app.route("/group/<group_id>")
+def group_page(group_id):
+    """Render the group chat page."""
+    group = get_group(group_id)
+    if not group:
+        return render_template("index.html", group_error="Group not found")
+
+    return render_template("index.html", group_id=group_id, group_name=group["name"])
 
 
 # if __name__ == "__main__":

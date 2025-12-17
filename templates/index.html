@@ -29,6 +29,7 @@
       </div>
 
       <div class="header-right">
+        <button id="group-btn" class="header-btn">Group</button>
         <button id="go-live-btn" class="header-btn">Live Scan</button>
       </div>
     </header>
@@ -142,6 +143,121 @@
 
     <!-- Hidden audio player for TTS -->
     <audio id="tts-audio" preload="none"></audio>
+
+    <!-- ========== GROUP MODAL ========== -->
+    <div id="group-modal" class="modal hidden">
+      <div class="modal-content">
+        <button id="close-modal-btn" class="modal-close">&times;</button>
+
+        <!-- Create/Join selection -->
+        <div id="group-start-view" class="group-view">
+          <h2>Group Chat</h2>
+          <p class="modal-subtitle">Decide where to eat together!</p>
+
+          <div class="group-options">
+            <button id="create-group-option" class="group-option-btn">
+              <span class="option-icon">+</span>
+              <span class="option-text">Create Group</span>
+            </button>
+            <button id="join-group-option" class="group-option-btn">
+              <span class="option-icon">&#x2192;</span>
+              <span class="option-text">Join Group</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Create group form -->
+        <div id="group-create-view" class="group-view hidden">
+          <h2>Create Group</h2>
+          <form id="create-group-form" class="group-form">
+            <label for="group-name-input">Group Name</label>
+            <input type="text" id="group-name-input" placeholder="Friday Lunch Crew" maxlength="50" required />
+
+            <label for="create-nickname-input">Your Nickname</label>
+            <input type="text" id="create-nickname-input" placeholder="Enter your name" maxlength="20" required />
+
+            <button type="submit" class="group-submit-btn">Create Group</button>
+            <button type="button" id="back-to-start-1" class="group-back-btn">Back</button>
+          </form>
+        </div>
+
+        <!-- Join group form -->
+        <div id="group-join-view" class="group-view hidden">
+          <h2>Join Group</h2>
+          <form id="join-group-form" class="group-form">
+            <label for="join-group-id-input">Group Code</label>
+            <input type="text" id="join-group-id-input" placeholder="Enter 8-char code" maxlength="8" required />
+
+            <label for="join-nickname-input">Your Nickname</label>
+            <input type="text" id="join-nickname-input" placeholder="Enter your name" maxlength="20" required />
+
+            <button type="submit" class="group-submit-btn">Join Group</button>
+            <button type="button" id="back-to-start-2" class="group-back-btn">Back</button>
+          </form>
+        </div>
+
+        <!-- Share link view -->
+        <div id="group-share-view" class="group-view hidden">
+          <h2>Group Created!</h2>
+          <p>Share this link with friends:</p>
+          <div class="share-link-box">
+            <input type="text" id="share-link-input" readonly />
+            <button type="button" id="copy-link-btn" class="copy-btn">Copy</button>
+          </div>
+          <button type="button" id="enter-group-btn" class="group-submit-btn">Enter Group Chat</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== GROUP CHAT SCREEN ========== -->
+    <div id="group-screen" class="screen">
+      <header class="app-header app-header--grid">
+        <div class="header-left">
+          <button id="leave-group-btn" class="header-btn">Leave</button>
+        </div>
+
+        <div class="header-center">
+          <div class="app-title" id="group-title">Group Chat</div>
+          <div class="group-members-count" id="group-members-count"></div>
+        </div>
+
+        <div class="header-right">
+          <button id="group-share-btn" class="header-btn">Share</button>
+        </div>
+      </header>
+
+      <div class="group-layout">
+        <!-- Restaurant sidebar -->
+        <aside id="group-restaurants" class="group-sidebar">
+          <div class="sidebar-header">
+            <h3>Shared Restaurants</h3>
+          </div>
+          <div id="restaurant-list" class="restaurant-list">
+            <!-- Shared restaurants appear here -->
+            <div class="empty-state">No restaurants shared yet</div>
+          </div>
+        </aside>
+
+        <!-- Group chat area -->
+        <main class="group-main">
+          <div id="group-chat-container" class="chat-container group-chat">
+            <!-- Group messages go here -->
+          </div>
+
+          <form id="group-chat-form" class="chat-input-bar">
+            <input
+              id="group-chat-input"
+              class="chat-input"
+              type="text"
+              placeholder="Message the group..."
+              autocomplete="off"
+              required
+            />
+            <button class="chat-send-btn" type="submit">&#10148;</button>
+          </form>
+        </main>
+      </div>
+    </div>
 
   </div>
 
@@ -728,7 +844,427 @@ liveViewMoreBtn.addEventListener("click", async () => {
   showChatScreen();
 });
 
+// ========== GROUP CHAT ==========
+const groupBtn = document.getElementById("group-btn");
+const groupModal = document.getElementById("group-modal");
+const closeModalBtn = document.getElementById("close-modal-btn");
+const groupScreen = document.getElementById("group-screen");
 
+// Modal views
+const groupStartView = document.getElementById("group-start-view");
+const groupCreateView = document.getElementById("group-create-view");
+const groupJoinView = document.getElementById("group-join-view");
+const groupShareView = document.getElementById("group-share-view");
+
+// Forms and inputs
+const createGroupForm = document.getElementById("create-group-form");
+const joinGroupForm = document.getElementById("join-group-form");
+const groupNameInput = document.getElementById("group-name-input");
+const createNicknameInput = document.getElementById("create-nickname-input");
+const joinGroupIdInput = document.getElementById("join-group-id-input");
+const joinNicknameInput = document.getElementById("join-nickname-input");
+const shareLinkInput = document.getElementById("share-link-input");
+const copyLinkBtn = document.getElementById("copy-link-btn");
+const enterGroupBtn = document.getElementById("enter-group-btn");
+
+// Group screen elements
+const groupTitle = document.getElementById("group-title");
+const groupMembersCount = document.getElementById("group-members-count");
+const groupChatContainer = document.getElementById("group-chat-container");
+const groupChatForm = document.getElementById("group-chat-form");
+const groupChatInput = document.getElementById("group-chat-input");
+const restaurantList = document.getElementById("restaurant-list");
+const leaveGroupBtn = document.getElementById("leave-group-btn");
+const groupShareBtn = document.getElementById("group-share-btn");
+
+// Group state
+let currentGroupId = null;
+let currentUserId = null;
+let currentNickname = null;
+let lastMessageTimestamp = 0;
+let pollInterval = null;
+
+// Show/hide modal views
+function showModalView(view) {
+  [groupStartView, groupCreateView, groupJoinView, groupShareView].forEach(v => v.classList.add("hidden"));
+  view.classList.remove("hidden");
+}
+
+function openModal() {
+  groupModal.classList.remove("hidden");
+  showModalView(groupStartView);
+}
+
+function closeModal() {
+  groupModal.classList.add("hidden");
+}
+
+// Modal navigation
+groupBtn.addEventListener("click", openModal);
+closeModalBtn.addEventListener("click", closeModal);
+groupModal.addEventListener("click", (e) => {
+  if (e.target === groupModal) closeModal();
+});
+
+document.getElementById("create-group-option").addEventListener("click", () => showModalView(groupCreateView));
+document.getElementById("join-group-option").addEventListener("click", () => showModalView(groupJoinView));
+document.getElementById("back-to-start-1").addEventListener("click", () => showModalView(groupStartView));
+document.getElementById("back-to-start-2").addEventListener("click", () => showModalView(groupStartView));
+
+// Create group
+createGroupForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = groupNameInput.value.trim();
+  const nickname = createNicknameInput.value.trim();
+
+  if (!name || !nickname) return;
+
+  try {
+    const res = await fetch("/group/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, nickname }),
+    });
+    const data = await res.json();
+
+    if (data.status === "ok") {
+      currentGroupId = data.group_id;
+      currentUserId = data.user_id;
+      currentNickname = nickname;
+
+      // Show share link
+      const shareUrl = window.location.origin + `/group/${data.group_id}`;
+      shareLinkInput.value = shareUrl;
+      showModalView(groupShareView);
+    } else {
+      alert(data.error || "Failed to create group");
+    }
+  } catch (err) {
+    console.error("Create group error:", err);
+    alert("Failed to create group");
+  }
+});
+
+// Copy share link
+copyLinkBtn.addEventListener("click", () => {
+  shareLinkInput.select();
+  document.execCommand("copy");
+  copyLinkBtn.textContent = "Copied!";
+  setTimeout(() => copyLinkBtn.textContent = "Copy", 2000);
+});
+
+// Enter group after creation
+enterGroupBtn.addEventListener("click", () => {
+  closeModal();
+  enterGroupChat();
+});
+
+// Join group
+joinGroupForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const groupId = joinGroupIdInput.value.trim().toLowerCase();
+  const nickname = joinNicknameInput.value.trim();
+
+  if (!groupId || !nickname) return;
+
+  try {
+    const res = await fetch(`/group/${groupId}/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nickname }),
+    });
+    const data = await res.json();
+
+    if (data.status === "ok") {
+      currentGroupId = data.group_id;
+      currentUserId = data.user_id;
+      currentNickname = nickname;
+      closeModal();
+      enterGroupChat();
+    } else {
+      alert(data.error || "Failed to join group");
+    }
+  } catch (err) {
+    console.error("Join group error:", err);
+    alert("Failed to join group");
+  }
+});
+
+// Enter group chat screen
+async function enterGroupChat() {
+  if (!currentGroupId) return;
+
+  // Switch to group screen
+  chatScreen.classList.remove("active");
+  liveScreen.classList.remove("active");
+  groupScreen.classList.add("active");
+
+  // Load group info
+  try {
+    const res = await fetch(`/group/${currentGroupId}/info`);
+    const data = await res.json();
+
+    groupTitle.textContent = data.name;
+    groupMembersCount.textContent = `${data.member_count} member${data.member_count !== 1 ? "s" : ""}`;
+
+    // Load restaurants
+    updateRestaurantList(data.restaurants);
+  } catch (err) {
+    console.error("Load group info error:", err);
+  }
+
+  // Start polling for messages
+  lastMessageTimestamp = 0;
+  groupChatContainer.innerHTML = "";
+  pollGroupMessages();
+  pollInterval = setInterval(pollGroupMessages, 2000);
+}
+
+// Poll for new messages
+async function pollGroupMessages() {
+  if (!currentGroupId) return;
+
+  try {
+    const res = await fetch(`/group/${currentGroupId}/messages?since=${lastMessageTimestamp}`);
+    const data = await res.json();
+
+    if (data.messages && data.messages.length > 0) {
+      data.messages.forEach(msg => {
+        appendGroupMessage(msg);
+        lastMessageTimestamp = Math.max(lastMessageTimestamp, msg.timestamp);
+      });
+    }
+
+    // Update member count
+    if (data.members) {
+      groupMembersCount.textContent = `${data.members.length} member${data.members.length !== 1 ? "s" : ""}`;
+    }
+  } catch (err) {
+    console.error("Poll messages error:", err);
+  }
+}
+
+// Append message to group chat
+function appendGroupMessage(msg) {
+  const div = document.createElement("div");
+  div.classList.add("message", "group-message");
+  div.dataset.id = msg.id;
+
+  if (msg.type === "system") {
+    div.classList.add("system-message");
+    div.textContent = msg.text;
+  } else if (msg.type === "chat") {
+    const isMe = msg.user_id === currentUserId;
+    div.classList.add(isMe ? "message-user" : "message-other");
+
+    if (!isMe) {
+      const nameSpan = document.createElement("span");
+      nameSpan.classList.add("message-author");
+      nameSpan.textContent = msg.nickname;
+      div.appendChild(nameSpan);
+    }
+
+    const textSpan = document.createElement("span");
+    textSpan.classList.add("message-text");
+    textSpan.textContent = msg.text;
+    div.appendChild(textSpan);
+  } else if (msg.type === "restaurant_share") {
+    div.classList.add("restaurant-message");
+    const r = msg.restaurant;
+
+    div.innerHTML = `
+      <span class="message-author">${msg.nickname}</span> shared a restaurant:
+      <div class="shared-restaurant">
+        <strong>${r.name}</strong>
+        ${r.rating ? `<span class="rating">⭐ ${r.rating}</span>` : ""}
+        ${r.price ? `<span class="price">${r.price}</span>` : ""}
+        ${r.url ? `<a href="${r.url}" target="_blank" class="yelp-link">View on Yelp</a>` : ""}
+      </div>
+    `;
+  }
+
+  groupChatContainer.appendChild(div);
+  groupChatContainer.scrollTop = groupChatContainer.scrollHeight;
+}
+
+// Send group message
+groupChatForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = groupChatInput.value.trim();
+  if (!text || !currentGroupId) return;
+
+  groupChatInput.value = "";
+
+  try {
+    await fetch(`/group/${currentGroupId}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    // Message will appear on next poll
+  } catch (err) {
+    console.error("Send message error:", err);
+  }
+});
+
+// Update restaurant list in sidebar with voting
+function updateRestaurantList(restaurants) {
+  if (!restaurants || restaurants.length === 0) {
+    restaurantList.innerHTML = '<div class="empty-state">No restaurants shared yet</div>';
+    return;
+  }
+
+  // Find the winner (most votes, at least 1 vote)
+  let maxVotes = 0;
+  let winnerId = null;
+  restaurants.forEach(r => {
+    const voteCount = (r.votes || []).length;
+    if (voteCount > maxVotes) {
+      maxVotes = voteCount;
+      winnerId = r.business_id;
+    }
+  });
+
+  restaurantList.innerHTML = restaurants.map(r => {
+    const votes = r.votes || [];
+    const voteCount = votes.length;
+    const hasVoted = votes.some(v => v.user_id === currentUserId);
+    const isWinner = winnerId === r.business_id && maxVotes > 0;
+    const voterNames = votes.map(v => v.nickname).join(", ");
+
+    return `
+    <div class="restaurant-card ${isWinner ? 'winner' : ''}" data-id="${r.business_id}">
+      ${isWinner ? '<div class="winner-badge">Top Pick!</div>' : ''}
+      <div class="restaurant-name">${r.name}</div>
+      <div class="restaurant-meta">
+        ${r.rating ? `⭐ ${r.rating}` : ""}
+        ${r.price ? `• ${r.price}` : ""}
+      </div>
+      <div class="restaurant-shared-by">Shared by ${r.shared_by}</div>
+      <div class="vote-section">
+        <button class="vote-btn ${hasVoted ? 'voted' : ''}" data-business-id="${r.business_id}" onclick="toggleVote('${r.business_id}', ${hasVoted})">
+          ${hasVoted ? '♥' : '♡'} ${voteCount}
+        </button>
+        ${voterNames ? `<span class="voter-names" title="${voterNames}">${voterNames}</span>` : ''}
+      </div>
+      ${r.url ? `<a href="${r.url}" target="_blank" class="yelp-link">View on Yelp</a>` : ""}
+    </div>
+  `}).join("");
+}
+
+// Toggle vote for a restaurant
+async function toggleVote(businessId, hasVoted) {
+  if (!currentGroupId) return;
+
+  const endpoint = hasVoted ? 'unvote' : 'vote';
+
+  try {
+    const res = await fetch(`/group/${currentGroupId}/${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ business_id: businessId }),
+    });
+    const data = await res.json();
+
+    if (data.status === "ok") {
+      updateRestaurantList(data.restaurants);
+      // Poll immediately to show the vote message
+      pollGroupMessages();
+    } else {
+      console.error("Vote error:", data.error);
+    }
+  } catch (err) {
+    console.error("Vote request error:", err);
+  }
+}
+
+// Leave group
+leaveGroupBtn.addEventListener("click", async () => {
+  if (!currentGroupId) return;
+
+  if (!confirm("Leave this group?")) return;
+
+  try {
+    await fetch(`/group/${currentGroupId}/leave`, { method: "POST" });
+  } catch (err) {
+    console.error("Leave group error:", err);
+  }
+
+  // Clear state and return to chat
+  clearInterval(pollInterval);
+  currentGroupId = null;
+  currentUserId = null;
+  currentNickname = null;
+  lastMessageTimestamp = 0;
+
+  groupScreen.classList.remove("active");
+  chatScreen.classList.add("active");
+});
+
+// Share group link
+groupShareBtn.addEventListener("click", () => {
+  const shareUrl = window.location.origin + `/group/${currentGroupId}`;
+  if (navigator.share) {
+    navigator.share({ title: "Join my group!", url: shareUrl });
+  } else {
+    navigator.clipboard.writeText(shareUrl);
+    alert("Link copied to clipboard!");
+  }
+});
+
+// Share restaurant from main chat to group
+function addShareToGroupButton() {
+  // Add share buttons to live scan results if in a group
+  if (!currentGroupId || !lastLiveResultJson) return;
+
+  const enriched = lastLiveResultJson.enriched;
+  const top = lastLiveResultJson.top_pick;
+  const restaurant = enriched || top;
+
+  if (restaurant) {
+    shareRestaurantToGroup(restaurant);
+  }
+}
+
+async function shareRestaurantToGroup(restaurant) {
+  if (!currentGroupId) {
+    alert("Join a group first to share restaurants!");
+    return;
+  }
+
+  try {
+    const res = await fetch(`/group/${currentGroupId}/share_restaurant`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ restaurant }),
+    });
+    const data = await res.json();
+
+    if (data.status === "ok") {
+      updateRestaurantList(data.restaurants);
+      // Poll immediately to show the share message
+      pollGroupMessages();
+    } else {
+      alert(data.error || "Failed to share restaurant");
+    }
+  } catch (err) {
+    console.error("Share restaurant error:", err);
+  }
+}
+
+// Check for group ID in URL on page load (for shareable links)
+(function checkGroupInUrl() {
+  const path = window.location.pathname;
+  const match = path.match(/^\/group\/([a-z0-9]+)$/i);
+
+  if (match) {
+    const groupId = match[1];
+    // Pre-fill the join form
+    joinGroupIdInput.value = groupId;
+    openModal();
+    showModalView(groupJoinView);
+  }
+})();
 
 
 
