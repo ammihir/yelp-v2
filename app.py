@@ -793,9 +793,10 @@ def upload_image():
 
     reply_text = yelp_resp["text"]
 
-    # Translate response to user's language if needed
+    # Translate responses to user's language if needed
     if user_lang != "en":
         reply_text = translate_text(reply_text, user_lang, "en")
+        vision_summary = translate_text(vision_summary, user_lang, "en")
 
     return jsonify({
         "vision_summary": vision_summary,
