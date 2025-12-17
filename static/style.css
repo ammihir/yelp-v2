@@ -460,3 +460,49 @@ body{
 .image-message .tts-btn{
   display:none;
 }
+
+/* ========= MICROPHONE BUTTON (STT) ========= */
+.mic-btn{
+  flex:0 0 auto;
+  border:none;
+  border-radius:50%;
+  width:36px;
+  height:36px;
+  font-size:1.1rem;
+  cursor:pointer;
+  display:none; /* Hidden by default, shown via JS if STT enabled */
+  align-items:center;
+  justify-content:center;
+  background:rgba(255,255,255,0.08);
+  color:var(--text);
+  transition:background 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.mic-btn:hover{
+  background:rgba(255,255,255,0.15);
+}
+.mic-btn:active{
+  transform:scale(0.95);
+}
+.mic-btn:disabled{
+  opacity:0.5;
+  cursor:default;
+}
+
+/* Recording state */
+.mic-btn.recording{
+  background:var(--yelp-red);
+  animation:pulse-recording 1s ease-in-out infinite;
+  box-shadow:0 0 0 0 rgba(211,35,35,0.5);
+}
+
+@keyframes pulse-recording{
+  0%{
+    box-shadow:0 0 0 0 rgba(211,35,35,0.5);
+  }
+  70%{
+    box-shadow:0 0 0 8px rgba(211,35,35,0);
+  }
+  100%{
+    box-shadow:0 0 0 0 rgba(211,35,35,0);
+  }
+}
