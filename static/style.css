@@ -839,3 +839,64 @@ body{
 .app-header--grid{
   grid-template-columns: 70px 1fr auto;
 }
+
+/* ========= VOTING ========= */
+.vote-section{
+  display:flex;
+  align-items:center;
+  gap:0.5rem;
+  margin-top:0.5rem;
+}
+.vote-btn{
+  display:flex;
+  align-items:center;
+  gap:0.3rem;
+  padding:0.35rem 0.6rem;
+  font-size:0.85rem;
+  background:rgba(255,255,255,0.06);
+  border:1px solid var(--stroke);
+  border-radius:999px;
+  color:var(--text);
+  cursor:pointer;
+  transition:background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.vote-btn:hover{
+  background:rgba(255,255,255,0.12);
+  border-color:var(--yelp-red);
+}
+.vote-btn:active{
+  transform:scale(0.95);
+}
+.vote-btn.voted{
+  background:rgba(211,35,35,0.2);
+  border-color:var(--yelp-red);
+  color:var(--yelp-red);
+}
+.voter-names{
+  font-size:0.7rem;
+  color:var(--placeholder);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  max-width:100px;
+}
+
+/* Winner card highlight */
+.restaurant-card.winner{
+  background:linear-gradient(135deg, rgba(211,35,35,0.15), rgba(255,169,46,0.1));
+  border-color:var(--yelp-red);
+  position:relative;
+}
+.winner-badge{
+  position:absolute;
+  top:-8px;
+  right:8px;
+  background:linear-gradient(135deg, var(--yelp-red), #ff6b35);
+  color:#fff;
+  font-size:0.65rem;
+  font-weight:600;
+  padding:0.2rem 0.5rem;
+  border-radius:999px;
+  text-transform:uppercase;
+  letter-spacing:0.03em;
+}

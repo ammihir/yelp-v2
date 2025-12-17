@@ -1425,6 +1425,118 @@ def leave_group(group_id):
     return jsonify({"status": "ok"})
 
 
+@app.route("/group/<group_id>/vote", methods=["POST"])
+def vote_restaurant(group_id):
+    """Vote for a restaurant in the group."""
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    user_id = session.get("group_user_id")
+    if not user_id or user_id not in group["members"]:
+        return jsonify({"error": "Not a member of this group"}), 403
+
+    data = request.get_json(silent=True) or {}
+    business_id = (data.get("business_id") or "").strip()
+
+    if not business_id:
+        return jsonify({"error": "business_id required"}), 400
+
+    # Find the restaurant
+    restaurant = None
+    for r in group["restaurants"]:
+        if r.get("business_id") == business_id:
+            restaurant = r
+            break
+
+    if not restaurant:
+        return jsonify({"error": "Restaurant not found in group"}), 404
+
+    # Get user's nickname for the vote record
+    nickname = group["members"][user_id]["nickname"]
+
+    # Initialize votes list if needed
+    if "votes" not in restaurant:
+        restaurant["votes"] = []
+
+    # Check if already voted
+    existing_vote = None
+    for v in restaurant["votes"]:
+        if v.get("user_id") == user_id:
+            existing_vote = v
+            break
+
+    if existing_vote:
+        return jsonify({"error": "Already voted for this restaurant"}), 400
+
+    # Add vote
+    restaurant["votes"].append({
+        "user_id": user_id,
+        "nickname": nickname,
+        "timestamp": time.time(),
+    })
+
+    # Add system message about the vote
+    group["messages"].append({
+        "id": uuid.uuid4().hex[:8],
+        "type": "system",
+        "text": f"{nickname} voted for {restaurant['name']}",
+        "timestamp": time.time(),
+    })
+
+    return jsonify({
+        "status": "ok",
+        "restaurant": restaurant,
+        "vote_count": len(restaurant["votes"]),
+        "restaurants": group["restaurants"],
+    })
+
+
+@app.route("/group/<group_id>/unvote", methods=["POST"])
+def unvote_restaurant(group_id):
+    """Remove vote for a restaurant in the group."""
+    group = get_group(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+
+    user_id = session.get("group_user_id")
+    if not user_id or user_id not in group["members"]:
+        return jsonify({"error": "Not a member of this group"}), 403
+
+    data = request.get_json(silent=True) or {}
+    business_id = (data.get("business_id") or "").strip()
+
+    if not business_id:
+        return jsonify({"error": "business_id required"}), 400
+
+    # Find the restaurant
+    restaurant = None
+    for r in group["restaurants"]:
+        if r.get("business_id") == business_id:
+            restaurant = r
+            break
+
+    if not restaurant:
+        return jsonify({"error": "Restaurant not found in group"}), 404
+
+    # Remove vote
+    if "votes" not in restaurant:
+        restaurant["votes"] = []
+
+    original_count = len(restaurant["votes"])
+    restaurant["votes"] = [v for v in restaurant["votes"] if v.get("user_id") != user_id]
+
+    if len(restaurant["votes"]) == original_count:
+        return jsonify({"error": "You haven't voted for this restaurant"}), 400
+
+    return jsonify({
+        "status": "ok",
+        "restaurant": restaurant,
+        "vote_count": len(restaurant["votes"]),
+        "restaurants": group["restaurants"],
+    })
+
+
 @app.route("/group/<group_id>")
 def group_page(group_id):
     """Render the group chat page."""

@@ -1107,24 +1107,75 @@ groupChatForm.addEventListener("submit", async (e) => {
   }
 });
 
-// Update restaurant list in sidebar
+// Update restaurant list in sidebar with voting
 function updateRestaurantList(restaurants) {
   if (!restaurants || restaurants.length === 0) {
     restaurantList.innerHTML = '<div class="empty-state">No restaurants shared yet</div>';
     return;
   }
 
-  restaurantList.innerHTML = restaurants.map(r => `
-    <div class="restaurant-card">
+  // Find the winner (most votes, at least 1 vote)
+  let maxVotes = 0;
+  let winnerId = null;
+  restaurants.forEach(r => {
+    const voteCount = (r.votes || []).length;
+    if (voteCount > maxVotes) {
+      maxVotes = voteCount;
+      winnerId = r.business_id;
+    }
+  });
+
+  restaurantList.innerHTML = restaurants.map(r => {
+    const votes = r.votes || [];
+    const voteCount = votes.length;
+    const hasVoted = votes.some(v => v.user_id === currentUserId);
+    const isWinner = winnerId === r.business_id && maxVotes > 0;
+    const voterNames = votes.map(v => v.nickname).join(", ");
+
+    return `
+    <div class="restaurant-card ${isWinner ? 'winner' : ''}" data-id="${r.business_id}">
+      ${isWinner ? '<div class="winner-badge">Top Pick!</div>' : ''}
       <div class="restaurant-name">${r.name}</div>
       <div class="restaurant-meta">
         ${r.rating ? `⭐ ${r.rating}` : ""}
         ${r.price ? `• ${r.price}` : ""}
       </div>
       <div class="restaurant-shared-by">Shared by ${r.shared_by}</div>
+      <div class="vote-section">
+        <button class="vote-btn ${hasVoted ? 'voted' : ''}" data-business-id="${r.business_id}" onclick="toggleVote('${r.business_id}', ${hasVoted})">
+          ${hasVoted ? '♥' : '♡'} ${voteCount}
+        </button>
+        ${voterNames ? `<span class="voter-names" title="${voterNames}">${voterNames}</span>` : ''}
+      </div>
       ${r.url ? `<a href="${r.url}" target="_blank" class="yelp-link">View on Yelp</a>` : ""}
     </div>
-  `).join("");
+  `}).join("");
+}
+
+// Toggle vote for a restaurant
+async function toggleVote(businessId, hasVoted) {
+  if (!currentGroupId) return;
+
+  const endpoint = hasVoted ? 'unvote' : 'vote';
+
+  try {
+    const res = await fetch(`/group/${currentGroupId}/${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ business_id: businessId }),
+    });
+    const data = await res.json();
+
+    if (data.status === "ok") {
+      updateRestaurantList(data.restaurants);
+      // Poll immediately to show the vote message
+      pollGroupMessages();
+    } else {
+      console.error("Vote error:", data.error);
+    }
+  } catch (err) {
+    console.error("Vote request error:", err);
+  }
 }
 
 // Leave group
