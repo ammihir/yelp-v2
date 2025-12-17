@@ -4,9 +4,11 @@ import uuid
 import json
 import base64
 import requests
+import hashlib
+import time
 
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, jsonify, session
+from flask import Flask, render_template, request, jsonify, session, send_file
 from openai import OpenAI
 
 load_dotenv()
@@ -16,11 +18,19 @@ APP_BOOT_ID = os.getenv("APP_BOOT_ID") or uuid.uuid4().hex
 # -------------------- KEYS --------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 YELP_API_KEY = os.getenv("YELP_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set")
 if not YELP_API_KEY:
     raise RuntimeError("YELP_API_KEY not set")
+
+# Optional features - warn but don't fail if not set
+if not GEMINI_API_KEY:
+    print("⚠️  GEMINI_API_KEY not set - translation features disabled")
+if not ELEVENLABS_API_KEY:
+    print("⚠️  ELEVENLABS_API_KEY not set - TTS features disabled")
 
 # -------------------- APP --------------------
 app = Flask(__name__)
@@ -50,9 +60,34 @@ else:
 # app.config["MAX_CONTENT_LENGTH"] = 6 * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 app.config["UPLOAD_FOLDER"] = "uploads"
+app.config["TTS_CACHE_FOLDER"] = "tts_cache"
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+os.makedirs(app.config["TTS_CACHE_FOLDER"], exist_ok=True)
 
 ALLOWED_EXT = {"jpg", "jpeg", "png", "webp"}
+
+# -------------------- LANGUAGE CONFIG --------------------
+SUPPORTED_LANGUAGES = {
+    "en": {"name": "English", "yelp_locale": "en_US", "tts_voice": "Rachel"},
+    "es": {"name": "Spanish", "yelp_locale": "es_ES", "tts_voice": "Antoni"},
+    "fr": {"name": "French", "yelp_locale": "fr_FR", "tts_voice": "Antoni"},
+    "de": {"name": "German", "yelp_locale": "de_DE", "tts_voice": "Antoni"},
+    "it": {"name": "Italian", "yelp_locale": "it_IT", "tts_voice": "Antoni"},
+    "pt": {"name": "Portuguese", "yelp_locale": "pt_BR", "tts_voice": "Antoni"},
+    "zh": {"name": "Chinese", "yelp_locale": "zh_CN", "tts_voice": "Rachel"},
+    "ja": {"name": "Japanese", "yelp_locale": "ja_JP", "tts_voice": "Rachel"},
+    "ko": {"name": "Korean", "yelp_locale": "ko_KR", "tts_voice": "Rachel"},
+    "hi": {"name": "Hindi", "yelp_locale": "en_US", "tts_voice": "Rachel"},
+    "ar": {"name": "Arabic", "yelp_locale": "en_US", "tts_voice": "Antoni"},
+}
+DEFAULT_LANGUAGE = "en"
+
+# ElevenLabs voice IDs (multilingual v2 model supports many languages)
+ELEVENLABS_VOICES = {
+    "Rachel": "21m00Tcm4TlvDq8ikWAM",  # Female, calm
+    "Antoni": "ErXwobaYiN019PkySvjV",  # Male, well-rounded
+}
+ELEVENLABS_MODEL = "eleven_multilingual_v2"
 
 client = OpenAI()
 
@@ -93,6 +128,145 @@ def encode_image(image_path: str) -> str:
 
 def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def get_user_language():
+    """Get the user's selected language from session, default to English."""
+    return session.get("language", DEFAULT_LANGUAGE)
+
+
+def get_yelp_locale():
+    """Get the Yelp locale for the user's selected language."""
+    lang = get_user_language()
+    return SUPPORTED_LANGUAGES.get(lang, SUPPORTED_LANGUAGES[DEFAULT_LANGUAGE])["yelp_locale"]
+
+
+# -------------------- TRANSLATION (GEMINI) --------------------
+def translate_text(text: str, target_lang: str, source_lang: str = "en") -> str:
+    """
+    Translate text using Google's Gemini API.
+    Returns original text if translation fails or languages are the same.
+    """
+    if not GEMINI_API_KEY:
+        return text
+    if not text or not text.strip():
+        return text
+    if target_lang == source_lang:
+        return text
+
+    target_name = SUPPORTED_LANGUAGES.get(target_lang, {}).get("name", target_lang)
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+
+        prompt = f"""Translate the following text to {target_name}.
+Only return the translated text, nothing else. Keep formatting (line breaks, emojis, etc.) intact.
+If the text contains proper nouns (business names, place names), keep them in their original form.
+
+Text to translate:
+{text}"""
+
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 2048,
+            }
+        }
+
+        resp = requests.post(url, json=payload, timeout=(5, 30))
+
+        if resp.ok:
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            if candidates:
+                content = candidates[0].get("content", {})
+                parts = content.get("parts", [])
+                if parts:
+                    return parts[0].get("text", text).strip()
+        else:
+            print(f"Gemini translation error: {resp.status_code} - {resp.text[:500]}")
+    except Exception as e:
+        print(f"Translation error: {repr(e)}")
+
+    return text
+
+
+# -------------------- TTS (ELEVENLABS) --------------------
+def generate_tts_audio(text: str, lang: str = "en") -> str | None:
+    """
+    Generate TTS audio using ElevenLabs API.
+    Returns the path to the cached audio file, or None if generation fails.
+    Uses caching based on text hash to avoid regenerating same audio.
+    """
+    if not ELEVENLABS_API_KEY:
+        return None
+    if not text or not text.strip():
+        return None
+
+    # Clean text for TTS (remove emojis and special chars that don't vocalize well)
+    clean_text = re.sub(r'[^\w\s.,!?;:\'"()-]', '', text)
+    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+
+    if not clean_text:
+        return None
+
+    # Create cache key from text and language
+    cache_key = hashlib.md5(f"{clean_text}:{lang}".encode()).hexdigest()
+    cache_path = os.path.join(app.config["TTS_CACHE_FOLDER"], f"{cache_key}.mp3")
+
+    # Check cache first
+    if os.path.exists(cache_path):
+        return cache_path
+
+    # Get voice for language
+    voice_name = SUPPORTED_LANGUAGES.get(lang, SUPPORTED_LANGUAGES[DEFAULT_LANGUAGE])["tts_voice"]
+    voice_id = ELEVENLABS_VOICES.get(voice_name, ELEVENLABS_VOICES["Rachel"])
+
+    try:
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+
+        headers = {
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        }
+
+        payload = {
+            "text": clean_text[:5000],  # ElevenLabs has text limits
+            "model_id": ELEVENLABS_MODEL,
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75,
+            }
+        }
+
+        resp = requests.post(url, headers=headers, json=payload, timeout=(5, 60))
+
+        if resp.ok:
+            with open(cache_path, "wb") as f:
+                f.write(resp.content)
+            return cache_path
+        else:
+            print(f"ElevenLabs TTS error: {resp.status_code} - {resp.text[:500]}")
+    except Exception as e:
+        print(f"TTS generation error: {repr(e)}")
+
+    return None
+
+
+def cleanup_old_tts_cache(max_age_hours: int = 24):
+    """Remove TTS cache files older than max_age_hours."""
+    cache_dir = app.config["TTS_CACHE_FOLDER"]
+    cutoff = time.time() - (max_age_hours * 3600)
+
+    try:
+        for filename in os.listdir(cache_dir):
+            filepath = os.path.join(cache_dir, filename)
+            if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff:
+                os.remove(filepath)
+    except Exception as e:
+        print(f"Cache cleanup error: {repr(e)}")
 
 
 def choose_best_candidate(overlay, vision):
@@ -370,23 +544,37 @@ def chat():
 
     lat = session.get("lat")
     lon = session.get("lon")
+    user_lang = get_user_language()
+    yelp_locale = get_yelp_locale()
+
+    # Translate user message to English for Yelp AI if needed
+    message_for_yelp = user_message
+    if user_lang != "en" and GEMINI_API_KEY:
+        message_for_yelp = translate_text(user_message, "en", user_lang)
 
     # ✅ inject context from last live scan (server-side reliable)
     ctx = build_place_context_for_chat()
-    final_message = f"{ctx}\n\nUser: {user_message}" if ctx else user_message
+    final_message = f"{ctx}\n\nUser: {message_for_yelp}" if ctx else message_for_yelp
 
     yelp_resp, new_chat_id = call_yelp_ai(
         final_message,
         lat=lat,
         lon=lon,
         chat_id=session.get("yelp_chat_id"),
-        locale="en_CA",
+        locale=yelp_locale,
     )
     if new_chat_id:
         session["yelp_chat_id"] = new_chat_id
 
+    reply_text = yelp_resp["text"]
+
+    # Translate response to user's language if needed
+    if user_lang != "en" and GEMINI_API_KEY:
+        reply_text = translate_text(reply_text, user_lang, "en")
+
     return jsonify({
-        "reply": yelp_resp["text"],
+        "reply": reply_text,
+        "language": user_lang,
         "meta": {
             "chat_id": session.get("yelp_chat_id"),
             "lat": lat,
@@ -412,6 +600,8 @@ def upload_image():
 
     lat = session.get("lat")
     lon = session.get("lon")
+    user_lang = get_user_language()
+    yelp_locale = get_yelp_locale()
 
     try:
         vision_summary = analyze_image_with_vision(save_path, lat=lat, lon=lon)
@@ -432,14 +622,21 @@ def upload_image():
         lat=lat,
         lon=lon,
         chat_id=session.get("yelp_chat_id"),
-        locale="en_CA",
+        locale=yelp_locale,
     )
     if new_chat_id:
         session["yelp_chat_id"] = new_chat_id
 
+    reply_text = yelp_resp["text"]
+
+    # Translate response to user's language if needed
+    if user_lang != "en" and GEMINI_API_KEY:
+        reply_text = translate_text(reply_text, user_lang, "en")
+
     return jsonify({
         "vision_summary": vision_summary,
-        "reply": yelp_resp["text"],
+        "reply": reply_text,
+        "language": user_lang,
         "meta": {"chat_id": session.get("yelp_chat_id"), "lat": lat, "lon": lon},
     })
 
@@ -454,6 +651,9 @@ def live_scan():
     lon = session.get("lon")
     if lat is None or lon is None:
         return jsonify({"error": "Location missing (allow GPS)."}), 400
+
+    user_lang = get_user_language()
+    yelp_locale = get_yelp_locale()
 
     filename = f"{uuid.uuid4().hex}.jpg"
     save_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
@@ -476,7 +676,7 @@ def live_scan():
             lat=float(lat),
             lon=float(lon),
             chat_id=session.get("yelp_live_chat_id"),
-            locale="en_CA",
+            locale=yelp_locale,
         )
         if new_chat_id:
             session["yelp_live_chat_id"] = new_chat_id
@@ -514,12 +714,25 @@ def live_scan():
             except Exception as e:
                 print("enrich error:", e)
 
+        # Translate AI text if needed
+        yelp_text = yelp_ai.get("text") or ""
+        if user_lang != "en" and GEMINI_API_KEY and yelp_text:
+            yelp_text = translate_text(yelp_text, user_lang, "en")
+
+        # Translate AI summary one-liner if available
+        if enriched and enriched.get("ai_summary") and enriched["ai_summary"].get("one_liner"):
+            if user_lang != "en" and GEMINI_API_KEY:
+                enriched["ai_summary"]["one_liner"] = translate_text(
+                    enriched["ai_summary"]["one_liner"], user_lang, "en"
+                )
+
         return jsonify({
             "mode": "live",
             "vision": vision,
-            "yelp_ai": {"text": yelp_ai.get("text"), "status": yelp_ai.get("status"), "candidates": overlay},
+            "yelp_ai": {"text": yelp_text, "status": yelp_ai.get("status"), "candidates": overlay},
             "top_pick": top_pick,
             "enriched": enriched,
+            "language": user_lang,
             "meta": {"lat": lat, "lon": lon},
         })
 
@@ -567,6 +780,99 @@ def inject_context():
 
     return jsonify({"status": "ok", "stored": True})
 
+
+# -------------------- LANGUAGE & TTS ENDPOINTS --------------------
+@app.route("/get_languages", methods=["GET"])
+def get_languages():
+    """Return list of supported languages and current selection."""
+    current = get_user_language()
+    languages = [
+        {"code": code, "name": info["name"]}
+        for code, info in SUPPORTED_LANGUAGES.items()
+    ]
+    return jsonify({
+        "languages": languages,
+        "current": current,
+        "translation_enabled": bool(GEMINI_API_KEY),
+        "tts_enabled": bool(ELEVENLABS_API_KEY),
+    })
+
+
+@app.route("/set_language", methods=["POST"])
+def set_language():
+    """Set user's preferred language."""
+    data = request.get_json(silent=True) or {}
+    lang_code = (data.get("language") or "").strip().lower()
+
+    if lang_code not in SUPPORTED_LANGUAGES:
+        return jsonify({
+            "error": f"Unsupported language: {lang_code}",
+            "supported": list(SUPPORTED_LANGUAGES.keys())
+        }), 400
+
+    session["language"] = lang_code
+
+    # Clear chat history when changing language for fresh context
+    session.pop("yelp_chat_id", None)
+    session.pop("yelp_live_chat_id", None)
+
+    return jsonify({
+        "status": "ok",
+        "language": lang_code,
+        "name": SUPPORTED_LANGUAGES[lang_code]["name"]
+    })
+
+
+@app.route("/tts", methods=["POST"])
+def generate_tts():
+    """Generate TTS audio for given text."""
+    if not ELEVENLABS_API_KEY:
+        return jsonify({"error": "TTS not configured", "tts_enabled": False}), 503
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+
+    if not text:
+        return jsonify({"error": "No text provided"}), 400
+
+    if len(text) > 5000:
+        return jsonify({"error": "Text too long (max 5000 chars)"}), 400
+
+    lang = data.get("language") or get_user_language()
+
+    # Clean up old cache files periodically (1 in 10 requests)
+    if uuid.uuid4().int % 10 == 0:
+        cleanup_old_tts_cache()
+
+    audio_path = generate_tts_audio(text, lang)
+
+    if audio_path and os.path.exists(audio_path):
+        filename = os.path.basename(audio_path)
+        return jsonify({
+            "status": "ok",
+            "audio_url": f"/tts_audio/{filename}",
+            "language": lang,
+        })
+    else:
+        return jsonify({"error": "Failed to generate audio"}), 500
+
+
+@app.route("/tts_audio/<filename>")
+def serve_tts_audio(filename):
+    """Serve cached TTS audio files."""
+    # Sanitize filename to prevent directory traversal
+    if not filename or ".." in filename or "/" in filename or "\\" in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+
+    if not filename.endswith(".mp3"):
+        return jsonify({"error": "Invalid file type"}), 400
+
+    filepath = os.path.join(app.config["TTS_CACHE_FOLDER"], filename)
+
+    if not os.path.exists(filepath):
+        return jsonify({"error": "Audio not found"}), 404
+
+    return send_file(filepath, mimetype="audio/mpeg")
 
 
 # if __name__ == "__main__":
