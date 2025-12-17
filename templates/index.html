@@ -137,7 +137,7 @@
               <button id="live-view-more-btn" class="live-view-more-btn">
                 View more in chat
               </button>
-              <button id="live-share-to-group-btn" class="live-share-btn hidden">
+              <button id="live-share-to-group-btn" class="live-share-btn">
                 Share to Group
               </button>
             </div>
@@ -227,6 +227,7 @@
         </div>
 
         <div class="header-right">
+          <button id="group-live-scan-btn" class="header-btn">Scan</button>
           <button id="group-share-btn" class="header-btn">Share</button>
         </div>
       </header>
@@ -270,6 +271,7 @@
     // ---------- DOM Elements ----------
     const chatScreen = document.getElementById("chat-screen");
     const liveScreen = document.getElementById("live-screen");
+    const groupScreen = document.getElementById("group-screen");
     const goLiveBtn = document.getElementById("go-live-btn");
     const backToChatBtn = document.getElementById("back-to-chat-btn");
 
@@ -683,26 +685,51 @@ form.addEventListener("submit", async (e) => {
       liveVideo.srcObject = null;
     }
 
+    // Track which screen user came from before going to live scan
+    let previousScreen = "chat"; // "chat" or "group"
+
     function showChatScreen() {
       chatScreen.classList.add("active");
       liveScreen.classList.remove("active");
+      groupScreen.classList.remove("active");
     }
 
     function showLiveScreen() {
       liveScreen.classList.add("active");
       chatScreen.classList.remove("active");
+      groupScreen.classList.remove("active");
+    }
+
+    function showGroupScreen() {
+      groupScreen.classList.add("active");
+      chatScreen.classList.remove("active");
+      liveScreen.classList.remove("active");
     }
 
     goLiveBtn.addEventListener("click", async () => {
+      previousScreen = "chat";
       showLiveScreen();
       await startVideoStream();
       // Optional: refresh location on entering live view
       refreshLocation().catch(console.error);
     });
 
+    // Group live scan button
+    const groupLiveScanBtn = document.getElementById("group-live-scan-btn");
+    groupLiveScanBtn.addEventListener("click", async () => {
+      previousScreen = "group";
+      showLiveScreen();
+      await startVideoStream();
+      refreshLocation().catch(console.error);
+    });
+
     backToChatBtn.addEventListener("click", () => {
       stopVideoStream();
-      showChatScreen();
+      if (previousScreen === "group" && currentGroupId) {
+        showGroupScreen();
+      } else {
+        showChatScreen();
+      }
     });
 
     window.addEventListener("load", () => {
@@ -799,19 +826,11 @@ liveScanBtn.addEventListener("click", async () => {
     }
 
     liveResultCard.classList.remove("hidden");
-
-    // Show share button if user is in a group and we have restaurant data
-    if (currentGroupId && (enriched || top)) {
-      liveShareToGroupBtn.classList.remove("hidden");
-    } else {
-      liveShareToGroupBtn.classList.add("hidden");
-    }
   } catch (err) {
     console.error("Live scan error:", err);
     lastLiveResultJson = null;
     liveResultText.textContent = "Error analyzing this view.";
     liveResultCard.classList.remove("hidden");
-    liveShareToGroupBtn.classList.add("hidden");
   } finally {
     liveScanBtn.disabled = false;
     liveScanBtn.textContent = "Scan inside frame";
@@ -822,14 +841,22 @@ liveScanBtn.addEventListener("click", async () => {
 
 // Share to group button handler
 liveShareToGroupBtn.addEventListener("click", async () => {
-  if (!currentGroupId || !lastLiveResultJson) return;
+  if (!currentGroupId) {
+    alert("Join or create a group first to share restaurants!");
+    return;
+  }
+
+  if (!lastLiveResultJson) {
+    alert("Scan a restaurant first!");
+    return;
+  }
 
   const enriched = lastLiveResultJson.enriched;
   const top = lastLiveResultJson.top_pick;
   const restaurant = enriched || top;
 
   if (!restaurant) {
-    alert("No restaurant data to share");
+    alert("No restaurant data to share. Try scanning again.");
     return;
   }
 
@@ -907,7 +934,6 @@ liveViewMoreBtn.addEventListener("click", async () => {
 const groupBtn = document.getElementById("group-btn");
 const groupModal = document.getElementById("group-modal");
 const closeModalBtn = document.getElementById("close-modal-btn");
-const groupScreen = document.getElementById("group-screen");
 
 // Modal views
 const groupStartView = document.getElementById("group-start-view");
@@ -1054,9 +1080,7 @@ async function enterGroupChat() {
   if (!currentGroupId) return;
 
   // Switch to group screen
-  chatScreen.classList.remove("active");
-  liveScreen.classList.remove("active");
-  groupScreen.classList.add("active");
+  showGroupScreen();
 
   // Load group info
   try {
@@ -1256,8 +1280,7 @@ leaveGroupBtn.addEventListener("click", async () => {
   currentNickname = null;
   lastMessageTimestamp = 0;
 
-  groupScreen.classList.remove("active");
-  chatScreen.classList.add("active");
+  showChatScreen();
 });
 
 // Share group link
