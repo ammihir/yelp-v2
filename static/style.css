@@ -841,11 +841,33 @@ body{
 
 /* Mobile responsive */
 @media (max-width:600px){
-  .group-sidebar{
-    display:none;
-  }
   .group-layout{
     flex-direction:column;
+  }
+  .group-sidebar{
+    width:100%;
+    flex:0 0 auto;
+    max-height:200px;
+    border-right:none;
+    border-top:1px solid var(--stroke);
+    order:2; /* Show below chat */
+  }
+  .group-main{
+    order:1;
+    flex:1;
+    min-height:300px;
+  }
+  .restaurant-list{
+    display:flex;
+    flex-direction:row;
+    overflow-x:auto;
+    overflow-y:hidden;
+    gap:0.5rem;
+    padding:0.5rem;
+  }
+  .restaurant-card{
+    min-width:180px;
+    flex:0 0 auto;
   }
 }
 

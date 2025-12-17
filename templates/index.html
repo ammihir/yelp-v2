@@ -877,6 +877,12 @@ liveShareToGroupBtn.addEventListener("click", async () => {
         liveShareToGroupBtn.textContent = "Share to Group";
         liveShareToGroupBtn.disabled = false;
       }, 2000);
+    } else if (data.error === "Group not found") {
+      // Group was lost (server restart clears in-memory groups)
+      alert("Group session expired. Please rejoin or create a new group.");
+      currentGroupId = null;
+      currentUserId = null;
+      currentNickname = null;
     } else {
       alert(data.error || "Failed to share restaurant");
     }
