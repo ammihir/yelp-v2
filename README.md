@@ -10,6 +10,7 @@ TasteLens is a small Flask web app that lets users:
 1) chat with Yelp AI using their current location,  
 2) upload a photo and ask “what place is this?”, and  
 3) do a **Live Scan** (camera frame capture) to identify a nearby business and pull an AI review summary.
+4) Group Chat 
 
 ## What it does
 
