@@ -963,6 +963,40 @@ def get_languages():
     })
 
 
+@app.route("/test_translation", methods=["GET"])
+def test_translation():
+    """Debug endpoint to test translation is working."""
+    user_lang = get_user_language()
+    test_text = "I found 3 great restaurants near you. The top rated is Pizza Palace with 4.5 stars."
+
+    if user_lang == "en":
+        return jsonify({
+            "status": "skipped",
+            "reason": "Language is English, no translation needed",
+            "session_language": user_lang,
+            "original": test_text,
+            "translated": test_text,
+        })
+
+    try:
+        translated = translate_text(test_text, user_lang, "en")
+        return jsonify({
+            "status": "ok",
+            "session_language": user_lang,
+            "target_language_name": SUPPORTED_LANGUAGES.get(user_lang, {}).get("name"),
+            "original": test_text,
+            "translated": translated,
+            "translation_worked": translated != test_text,
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "session_language": user_lang,
+            "original": test_text,
+            "error": str(e),
+        }), 500
+
+
 @app.route("/set_language", methods=["POST"])
 def set_language():
     """Set user's preferred language."""
