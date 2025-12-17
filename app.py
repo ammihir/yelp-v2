@@ -891,6 +891,13 @@ def live_scan():
                     enriched["ai_summary"]["one_liner"], user_lang, "en"
                 )
 
+        # Translate vision text fields if needed
+        if user_lang != "en":
+            if vision.get("detected_text"):
+                vision["detected_text"] = translate_text(vision["detected_text"], user_lang, "en")
+            if vision.get("notes"):
+                vision["notes"] = translate_text(vision["notes"], user_lang, "en")
+
         return jsonify({
             "mode": "live",
             "vision": vision,
