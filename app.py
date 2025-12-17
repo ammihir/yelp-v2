@@ -269,6 +269,120 @@ def cleanup_old_tts_cache(max_age_hours: int = 24):
         print(f"Cache cleanup error: {repr(e)}")
 
 
+# -------------------- STT (GEMINI) --------------------
+def transcribe_audio_with_gemini(audio_path: str, lang: str = "en") -> dict:
+    """
+    Transcribe audio using Google's Gemini API.
+    Gemini 2.0 Flash supports native audio input.
+    Returns dict with 'text', 'success', and 'detected_language' keys.
+    """
+    if not GEMINI_API_KEY:
+        return {"text": "", "success": False, "error": "STT not configured"}
+
+    if not os.path.exists(audio_path):
+        return {"text": "", "success": False, "error": "Audio file not found"}
+
+    try:
+        # Read and encode audio file
+        with open(audio_path, "rb") as f:
+            audio_data = base64.b64encode(f.read()).decode("utf-8")
+
+        # Determine MIME type based on file extension
+        ext = audio_path.rsplit(".", 1)[-1].lower()
+        mime_types = {
+            "webm": "audio/webm",
+            "mp3": "audio/mpeg",
+            "wav": "audio/wav",
+            "ogg": "audio/ogg",
+            "m4a": "audio/mp4",
+        }
+        mime_type = mime_types.get(ext, "audio/webm")
+
+        # Build list of supported language names for detection
+        supported_lang_list = ", ".join([f"{code} ({info['name']})" for code, info in SUPPORTED_LANGUAGES.items()])
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+
+        prompt = f"""Transcribe this audio and detect the spoken language.
+
+Supported languages: {supported_lang_list}
+
+Return ONLY valid JSON in this exact format:
+{{"text": "transcribed text here", "language": "xx"}}
+
+Where "language" is the 2-letter code (en, es, fr, de, it, pt, zh, ja, ko, hi, ar) of the detected spoken language.
+If you cannot understand the audio or it's silent, return: {{"text": "", "language": "en"}}
+Do not include any other text or explanation, just the JSON."""
+
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": mime_type,
+                            "data": audio_data
+                        }
+                    }
+                ]
+            }],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 1024,
+            }
+        }
+
+        resp = requests.post(url, json=payload, timeout=(5, 60))
+
+        if resp.ok:
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            if candidates:
+                content = candidates[0].get("content", {})
+                parts = content.get("parts", [])
+                if parts:
+                    raw_text = parts[0].get("text", "").strip()
+
+                    # Strip markdown code blocks if present (Gemini often wraps JSON)
+                    if raw_text.startswith("```"):
+                        # Remove ```json or ``` at start and ``` at end
+                        lines = raw_text.split("\n")
+                        if lines[0].startswith("```"):
+                            lines = lines[1:]  # Remove first line
+                        if lines and lines[-1].strip() == "```":
+                            lines = lines[:-1]  # Remove last line
+                        raw_text = "\n".join(lines).strip()
+
+                    # Try to parse as JSON
+                    try:
+                        result = json.loads(raw_text)
+                        text = result.get("text", "").strip()
+                        detected_lang = result.get("language", "en").lower()
+                        # Validate detected language
+                        if detected_lang not in SUPPORTED_LANGUAGES:
+                            detected_lang = "en"
+                        return {
+                            "text": text,
+                            "success": True,
+                            "detected_language": detected_lang
+                        }
+                    except json.JSONDecodeError:
+                        # Fallback: treat entire response as transcribed text
+                        return {
+                            "text": raw_text,
+                            "success": True,
+                            "detected_language": lang  # Keep current language
+                        }
+            return {"text": "", "success": False, "error": "No transcription returned"}
+        else:
+            print(f"Gemini STT error: {resp.status_code} - {resp.text[:500]}")
+            return {"text": "", "success": False, "error": f"API error: {resp.status_code}"}
+
+    except Exception as e:
+        print(f"STT error: {repr(e)}")
+        return {"text": "", "success": False, "error": str(e)}
+
+
 def choose_best_candidate(overlay, vision):
     target = _norm(vision.get("brand_or_business_name") or "") or _norm(
         (vision.get("search_terms") or [""])[0]
@@ -795,6 +909,7 @@ def get_languages():
         "current": current,
         "translation_enabled": bool(GEMINI_API_KEY),
         "tts_enabled": bool(ELEVENLABS_API_KEY),
+        "stt_enabled": bool(GEMINI_API_KEY),  # STT uses Gemini
     })
 
 
@@ -873,6 +988,62 @@ def serve_tts_audio(filename):
         return jsonify({"error": "Audio not found"}), 404
 
     return send_file(filepath, mimetype="audio/mpeg")
+
+
+@app.route("/stt", methods=["POST"])
+def speech_to_text():
+    """Convert speech audio to text using Gemini with language detection."""
+    if not GEMINI_API_KEY:
+        return jsonify({"error": "STT not configured", "stt_enabled": False}), 503
+
+    f = request.files.get("audio")
+    if not f or f.filename == "":
+        return jsonify({"error": "No audio provided"}), 400
+
+    # Get file extension
+    ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else "webm"
+    allowed_audio = {"webm", "mp3", "wav", "ogg", "m4a"}
+    if ext not in allowed_audio:
+        ext = "webm"  # Default to webm for browser recordings
+
+    filename = f"{uuid.uuid4().hex}.{ext}"
+    save_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    f.save(save_path)
+
+    user_lang = get_user_language()
+
+    try:
+        result = transcribe_audio_with_gemini(save_path, user_lang)
+
+        if result["success"]:
+            detected_lang = result.get("detected_language", user_lang)
+            language_changed = False
+
+            # Auto-switch language if different from current
+            if detected_lang != user_lang and detected_lang in SUPPORTED_LANGUAGES:
+                session["language"] = detected_lang
+                # Clear chat history for fresh context in new language
+                session.pop("yelp_chat_id", None)
+                session.pop("yelp_live_chat_id", None)
+                language_changed = True
+
+            return jsonify({
+                "status": "ok",
+                "text": result["text"],
+                "detected_language": detected_lang,
+                "language_changed": language_changed,
+                "language_name": SUPPORTED_LANGUAGES.get(detected_lang, {}).get("name", "English"),
+            })
+        else:
+            return jsonify({
+                "error": result.get("error", "Transcription failed"),
+                "text": "",
+            }), 500
+    finally:
+        try:
+            os.remove(save_path)
+        except Exception:
+            pass
 
 
 # if __name__ == "__main__":

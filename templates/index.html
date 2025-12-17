@@ -58,6 +58,7 @@
           autocomplete="off"
           required
         />
+        <button type="button" id="mic-btn" class="mic-btn" title="Voice input">🎤</button>
         <button class="chat-send-btn" type="submit">➤</button>
       </form>
     </div>
@@ -160,11 +161,18 @@
     const liveVideo = document.getElementById("live-video");
     let videoStream = null;
 
-    // Language & TTS elements
+    // Language & TTS/STT elements
     const languageSelector = document.getElementById("language-selector");
     const ttsAudio = document.getElementById("tts-audio");
+    const micBtn = document.getElementById("mic-btn");
     let ttsEnabled = false;
+    let sttEnabled = false;
     let currentLanguage = localStorage.getItem("selectedLanguage") || "en";
+
+    // STT recording state
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let isRecording = false;
 
 
 
@@ -197,13 +205,21 @@
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
-    // ---------- Language & TTS Functions ----------
+    // ---------- Language & TTS/STT Functions ----------
     async function loadLanguages() {
       try {
         const res = await fetch("/get_languages");
         const data = await res.json();
 
         ttsEnabled = data.tts_enabled;
+        sttEnabled = data.stt_enabled;
+
+        // Show/hide mic button based on STT availability
+        if (sttEnabled) {
+          micBtn.style.display = "flex";
+        } else {
+          micBtn.style.display = "none";
+        }
 
         // Populate language selector
         languageSelector.innerHTML = "";
@@ -287,6 +303,101 @@
 
     // Initialize languages on load
     loadLanguages();
+
+    // ---------- STT (Voice Recording) ----------
+    async function startRecording() {
+      if (!sttEnabled) return;
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) {
+            audioChunks.push(e.data);
+          }
+        };
+
+        mediaRecorder.onstop = async () => {
+          // Stop all tracks
+          stream.getTracks().forEach(track => track.stop());
+
+          if (audioChunks.length === 0) {
+            micBtn.classList.remove("recording");
+            micBtn.innerHTML = "🎤";
+            isRecording = false;
+            return;
+          }
+
+          const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+
+          // Show processing state
+          micBtn.innerHTML = "...";
+          micBtn.disabled = true;
+
+          try {
+            const formData = new FormData();
+            formData.append("audio", audioBlob, "recording.webm");
+
+            const res = await fetch("/stt", {
+              method: "POST",
+              body: formData,
+            });
+            const data = await res.json();
+
+            if (data.status === "ok" && data.text) {
+              // Put transcribed text in input field
+              input.value = data.text;
+              input.focus();
+
+              // Handle auto language detection
+              if (data.language_changed && data.detected_language) {
+                currentLanguage = data.detected_language;
+                localStorage.setItem("selectedLanguage", data.detected_language);
+                // Update the dropdown
+                languageSelector.value = data.detected_language;
+                // Notify user
+                appendMessage(`Language detected: ${data.language_name}`, "bot");
+              }
+            } else if (data.error) {
+              console.error("STT error:", data.error);
+              appendMessage("Could not understand audio. Please try again.", "bot");
+            }
+          } catch (err) {
+            console.error("STT request error:", err);
+            appendMessage("Voice input error. Please try again.", "bot");
+          } finally {
+            micBtn.classList.remove("recording");
+            micBtn.innerHTML = "🎤";
+            micBtn.disabled = false;
+            isRecording = false;
+          }
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        micBtn.classList.add("recording");
+        micBtn.innerHTML = "⏹";
+      } catch (err) {
+        console.error("Microphone access error:", err);
+        appendMessage("Could not access microphone. Please check permissions.", "bot");
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      }
+    }
+
+    micBtn.addEventListener("click", () => {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        startRecording();
+      }
+    });
 
     // ---------- Location ----------
     function refreshLocation() {
