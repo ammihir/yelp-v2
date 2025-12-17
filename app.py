@@ -1251,9 +1251,20 @@ def get_group_messages(group_id):
         return jsonify({"error": "Group not found"}), 404
 
     since = request.args.get("since", type=float, default=0)
+    user_lang = get_user_language()
 
     # Filter messages newer than 'since'
     messages = [m for m in group["messages"] if m["timestamp"] > since]
+
+    # Translate system messages if user language is not English
+    if user_lang != "en":
+        translated_messages = []
+        for msg in messages:
+            msg_copy = msg.copy()
+            if msg_copy.get("type") == "system" and msg_copy.get("text"):
+                msg_copy["text"] = translate_text(msg_copy["text"], user_lang, "en")
+            translated_messages.append(msg_copy)
+        messages = translated_messages
 
     # Get current user info from session
     current_user_id = session.get("group_user_id")
@@ -1263,6 +1274,7 @@ def get_group_messages(group_id):
         "count": len(messages),
         "current_user_id": current_user_id,
         "members": [m["nickname"] for m in group["members"].values()],
+        "language": user_lang,
     })
 
 

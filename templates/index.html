@@ -133,9 +133,14 @@
             Rating & reviews <span class="ai-badge">AI summary</span>
           </div>
             <div id="live-result-text" class="live-result-text"></div>
-            <button id="live-view-more-btn" class="live-view-more-btn">
-              View more in chat
-            </button>
+            <div class="live-result-buttons">
+              <button id="live-view-more-btn" class="live-view-more-btn">
+                View more in chat
+              </button>
+              <button id="live-share-to-group-btn" class="live-share-btn hidden">
+                Share to Group
+              </button>
+            </div>
           </div>
         </div>
       </main>
@@ -708,6 +713,7 @@ const liveScanBtn = document.getElementById("live-scan-btn");
 const liveResultCard = document.getElementById("live-result-card");
 const liveResultText = document.getElementById("live-result-text");
 const liveViewMoreBtn = document.getElementById("live-view-more-btn");
+const liveShareToGroupBtn = document.getElementById("live-share-to-group-btn");
 const liveFrame = document.getElementById("live-frame");
 
 let lastLiveResultJson = null;
@@ -793,11 +799,19 @@ liveScanBtn.addEventListener("click", async () => {
     }
 
     liveResultCard.classList.remove("hidden");
+
+    // Show share button if user is in a group and we have restaurant data
+    if (currentGroupId && (enriched || top)) {
+      liveShareToGroupBtn.classList.remove("hidden");
+    } else {
+      liveShareToGroupBtn.classList.add("hidden");
+    }
   } catch (err) {
     console.error("Live scan error:", err);
     lastLiveResultJson = null;
     liveResultText.textContent = "Error analyzing this view.";
     liveResultCard.classList.remove("hidden");
+    liveShareToGroupBtn.classList.add("hidden");
   } finally {
     liveScanBtn.disabled = false;
     liveScanBtn.textContent = "Scan inside frame";
@@ -805,6 +819,46 @@ liveScanBtn.addEventListener("click", async () => {
 
   }
 });
+
+// Share to group button handler
+liveShareToGroupBtn.addEventListener("click", async () => {
+  if (!currentGroupId || !lastLiveResultJson) return;
+
+  const enriched = lastLiveResultJson.enriched;
+  const top = lastLiveResultJson.top_pick;
+  const restaurant = enriched || top;
+
+  if (!restaurant) {
+    alert("No restaurant data to share");
+    return;
+  }
+
+  try {
+    const res = await fetch(`/group/${currentGroupId}/share_restaurant`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ restaurant }),
+    });
+    const data = await res.json();
+
+    if (data.status === "ok") {
+      updateRestaurantList(data.restaurants);
+      pollGroupMessages();
+      liveShareToGroupBtn.textContent = "Shared!";
+      liveShareToGroupBtn.disabled = true;
+      setTimeout(() => {
+        liveShareToGroupBtn.textContent = "Share to Group";
+        liveShareToGroupBtn.disabled = false;
+      }, 2000);
+    } else {
+      alert(data.error || "Failed to share restaurant");
+    }
+  } catch (err) {
+    console.error("Share to group error:", err);
+    alert("Failed to share restaurant");
+  }
+});
+
 liveViewMoreBtn.addEventListener("click", async () => {
   if (lastLiveResultJson) {
     const enriched = lastLiveResultJson.enriched;
@@ -1216,46 +1270,6 @@ groupShareBtn.addEventListener("click", () => {
     alert("Link copied to clipboard!");
   }
 });
-
-// Share restaurant from main chat to group
-function addShareToGroupButton() {
-  // Add share buttons to live scan results if in a group
-  if (!currentGroupId || !lastLiveResultJson) return;
-
-  const enriched = lastLiveResultJson.enriched;
-  const top = lastLiveResultJson.top_pick;
-  const restaurant = enriched || top;
-
-  if (restaurant) {
-    shareRestaurantToGroup(restaurant);
-  }
-}
-
-async function shareRestaurantToGroup(restaurant) {
-  if (!currentGroupId) {
-    alert("Join a group first to share restaurants!");
-    return;
-  }
-
-  try {
-    const res = await fetch(`/group/${currentGroupId}/share_restaurant`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ restaurant }),
-    });
-    const data = await res.json();
-
-    if (data.status === "ok") {
-      updateRestaurantList(data.restaurants);
-      // Poll immediately to show the share message
-      pollGroupMessages();
-    } else {
-      alert(data.error || "Failed to share restaurant");
-    }
-  } catch (err) {
-    console.error("Share restaurant error:", err);
-  }
-}
 
 // Check for group ID in URL on page load (for shareable links)
 (function checkGroupInUrl() {
