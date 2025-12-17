@@ -22,7 +22,11 @@
         </div>
       </div>
 
-      <div class="header-center"></div>
+      <div class="header-center">
+        <select id="language-selector" class="language-selector" title="Select language">
+          <option value="en">English</option>
+        </select>
+      </div>
 
       <div class="header-right">
         <button id="go-live-btn" class="header-btn">Live Scan</button>
@@ -135,6 +139,8 @@
       </main>
     </div>
 
+    <!-- Hidden audio player for TTS -->
+    <audio id="tts-audio" preload="none"></audio>
 
   </div>
 
@@ -154,6 +160,12 @@
     const liveVideo = document.getElementById("live-video");
     let videoStream = null;
 
+    // Language & TTS elements
+    const languageSelector = document.getElementById("language-selector");
+    const ttsAudio = document.getElementById("tts-audio");
+    let ttsEnabled = false;
+    let currentLanguage = localStorage.getItem("selectedLanguage") || "en";
+
 
 
     
@@ -164,10 +176,117 @@
       if (role === "user") msg.classList.add("message-user");
       else msg.classList.add("message-bot");
       if (extraClass) msg.classList.add(extraClass);
-      msg.textContent = text;
+
+      // Create text content span
+      const textSpan = document.createElement("span");
+      textSpan.classList.add("message-text");
+      textSpan.textContent = text;
+      msg.appendChild(textSpan);
+
+      // Add TTS button for bot messages (if TTS is enabled)
+      if (role === "bot" && ttsEnabled && !extraClass) {
+        const ttsBtn = document.createElement("button");
+        ttsBtn.classList.add("tts-btn");
+        ttsBtn.innerHTML = "🔊";
+        ttsBtn.title = "Listen";
+        ttsBtn.onclick = () => playTTS(text, ttsBtn);
+        msg.appendChild(ttsBtn);
+      }
+
       chatContainer.appendChild(msg);
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
+
+    // ---------- Language & TTS Functions ----------
+    async function loadLanguages() {
+      try {
+        const res = await fetch("/get_languages");
+        const data = await res.json();
+
+        ttsEnabled = data.tts_enabled;
+
+        // Populate language selector
+        languageSelector.innerHTML = "";
+        data.languages.forEach(lang => {
+          const option = document.createElement("option");
+          option.value = lang.code;
+          option.textContent = lang.name;
+          if (lang.code === currentLanguage) {
+            option.selected = true;
+          }
+          languageSelector.appendChild(option);
+        });
+
+        // Sync with server
+        if (currentLanguage !== data.current) {
+          await setLanguage(currentLanguage);
+        }
+      } catch (err) {
+        console.error("Failed to load languages:", err);
+      }
+    }
+
+    async function setLanguage(langCode) {
+      try {
+        const res = await fetch("/set_language", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ language: langCode }),
+        });
+        const data = await res.json();
+        if (data.status === "ok") {
+          currentLanguage = langCode;
+          localStorage.setItem("selectedLanguage", langCode);
+        }
+      } catch (err) {
+        console.error("Failed to set language:", err);
+      }
+    }
+
+    languageSelector.addEventListener("change", async (e) => {
+      const newLang = e.target.value;
+      await setLanguage(newLang);
+      // Show confirmation message
+      appendMessage(`Language changed to ${e.target.options[e.target.selectedIndex].text}`, "bot");
+    });
+
+    async function playTTS(text, btn) {
+      if (!ttsEnabled) return;
+
+      const originalText = btn.innerHTML;
+      btn.innerHTML = "...";
+      btn.disabled = true;
+
+      try {
+        const res = await fetch("/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, language: currentLanguage }),
+        });
+        const data = await res.json();
+
+        if (data.audio_url) {
+          ttsAudio.src = data.audio_url;
+          ttsAudio.play();
+          btn.innerHTML = "🔈";
+
+          ttsAudio.onended = () => {
+            btn.innerHTML = originalText;
+          };
+        } else {
+          btn.innerHTML = originalText;
+          console.error("TTS error:", data.error);
+        }
+      } catch (err) {
+        console.error("TTS playback error:", err);
+        btn.innerHTML = originalText;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // Initialize languages on load
+    loadLanguages();
 
     // ---------- Location ----------
     function refreshLocation() {

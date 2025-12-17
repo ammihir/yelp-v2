@@ -379,3 +379,84 @@ body{
   display:block;
   object-fit:contain;
 }
+
+/* ========= LANGUAGE SELECTOR ========= */
+.language-selector{
+  background:rgba(255,255,255,0.08);
+  border:1px solid rgba(255,255,255,0.15);
+  border-radius:8px;
+  padding:0.35rem 0.6rem;
+  font-size:0.82rem;
+  color:var(--text);
+  cursor:pointer;
+  outline:none;
+  min-width:100px;
+  text-align:center;
+  appearance:none;
+  -webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23fff' fill-opacity='0.6' d='M5 6L0 0h10z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 0.5rem center;
+  padding-right:1.5rem;
+}
+.language-selector:hover{
+  border-color:rgba(255,255,255,0.25);
+}
+.language-selector:focus{
+  border-color:var(--yelp-red);
+  box-shadow:0 0 0 2px var(--focus);
+}
+.language-selector option{
+  background:var(--bg-1);
+  color:var(--text);
+}
+
+/* ========= TTS BUTTON ========= */
+.message{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:flex-start;
+  gap:0.4rem;
+}
+.message-text{
+  flex:1 1 auto;
+  min-width:0;
+}
+.tts-btn{
+  flex:0 0 auto;
+  background:rgba(255,255,255,0.08);
+  border:1px solid rgba(255,255,255,0.12);
+  border-radius:50%;
+  width:28px;
+  height:28px;
+  font-size:0.85rem;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  opacity:0.7;
+  transition:opacity 0.15s, background 0.15s;
+  margin-top:2px;
+}
+.tts-btn:hover{
+  opacity:1;
+  background:rgba(255,255,255,0.12);
+}
+.tts-btn:active{
+  transform:scale(0.92);
+}
+.tts-btn:disabled{
+  opacity:0.4;
+  cursor:default;
+}
+
+/* Adjust user message TTS position */
+.message-user .tts-btn{
+  background:rgba(0,0,0,0.15);
+  border-color:rgba(0,0,0,0.2);
+}
+
+/* Hide TTS button initially on small screens for image messages */
+.image-message .tts-btn{
+  display:none;
+}
