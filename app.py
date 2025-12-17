@@ -342,6 +342,17 @@ Do not include any other text or explanation, just the JSON."""
                 parts = content.get("parts", [])
                 if parts:
                     raw_text = parts[0].get("text", "").strip()
+
+                    # Strip markdown code blocks if present (Gemini often wraps JSON)
+                    if raw_text.startswith("```"):
+                        # Remove ```json or ``` at start and ``` at end
+                        lines = raw_text.split("\n")
+                        if lines[0].startswith("```"):
+                            lines = lines[1:]  # Remove first line
+                        if lines and lines[-1].strip() == "```":
+                            lines = lines[:-1]  # Remove last line
+                        raw_text = "\n".join(lines).strip()
+
                     # Try to parse as JSON
                     try:
                         result = json.loads(raw_text)
