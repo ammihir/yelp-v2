@@ -793,9 +793,10 @@ def upload_image():
 
     reply_text = yelp_resp["text"]
 
-    # Translate response to user's language if needed
+    # Translate responses to user's language if needed
     if user_lang != "en":
         reply_text = translate_text(reply_text, user_lang, "en")
+        vision_summary = translate_text(vision_summary, user_lang, "en")
 
     return jsonify({
         "vision_summary": vision_summary,
@@ -878,17 +879,41 @@ def live_scan():
             except Exception as e:
                 print("enrich error:", e)
 
-        # Translate AI text if needed
-        yelp_text = yelp_ai.get("text") or ""
-        if user_lang != "en" and yelp_text:
-            yelp_text = translate_text(yelp_text, user_lang, "en")
+        # Translate all text fields if needed
+        if user_lang != "en":
+            # Translate yelp AI text
+            yelp_text = yelp_ai.get("text") or ""
+            if yelp_text:
+                yelp_text = translate_text(yelp_text, user_lang, "en")
 
-        # Translate AI summary one-liner if available
-        if enriched and enriched.get("ai_summary") and enriched["ai_summary"].get("one_liner"):
-            if user_lang != "en":
-                enriched["ai_summary"]["one_liner"] = translate_text(
-                    enriched["ai_summary"]["one_liner"], user_lang, "en"
-                )
+            # Translate vision text fields
+            if vision.get("detected_text"):
+                vision["detected_text"] = translate_text(vision["detected_text"], user_lang, "en")
+            if vision.get("business_type"):
+                vision["business_type"] = translate_text(vision["business_type"], user_lang, "en")
+            if vision.get("notes"):
+                vision["notes"] = translate_text(vision["notes"], user_lang, "en")
+
+            # Translate enriched fields
+            if enriched:
+                ai_summary = enriched.get("ai_summary")
+                if ai_summary:
+                    if ai_summary.get("one_liner"):
+                        ai_summary["one_liner"] = translate_text(ai_summary["one_liner"], user_lang, "en")
+                    if ai_summary.get("overall_sentiment"):
+                        ai_summary["overall_sentiment"] = translate_text(ai_summary["overall_sentiment"], user_lang, "en")
+                    if ai_summary.get("highlights"):
+                        ai_summary["highlights"] = [translate_text(h, user_lang, "en") for h in ai_summary["highlights"]]
+                    if ai_summary.get("complaints"):
+                        ai_summary["complaints"] = [translate_text(c, user_lang, "en") for c in ai_summary["complaints"]]
+
+                # Translate review excerpts
+                if enriched.get("review_excerpts"):
+                    for excerpt in enriched["review_excerpts"]:
+                        if excerpt.get("text"):
+                            excerpt["text"] = translate_text(excerpt["text"], user_lang, "en")
+        else:
+            yelp_text = yelp_ai.get("text") or ""
 
         return jsonify({
             "mode": "live",
@@ -961,6 +986,40 @@ def get_languages():
         "tts_enabled": True,  # Uses OpenAI TTS
         "stt_enabled": True,  # Uses OpenAI Whisper
     })
+
+
+@app.route("/test_translation", methods=["GET"])
+def test_translation():
+    """Debug endpoint to test translation is working."""
+    user_lang = get_user_language()
+    test_text = "I found 3 great restaurants near you. The top rated is Pizza Palace with 4.5 stars."
+
+    if user_lang == "en":
+        return jsonify({
+            "status": "skipped",
+            "reason": "Language is English, no translation needed",
+            "session_language": user_lang,
+            "original": test_text,
+            "translated": test_text,
+        })
+
+    try:
+        translated = translate_text(test_text, user_lang, "en")
+        return jsonify({
+            "status": "ok",
+            "session_language": user_lang,
+            "target_language_name": SUPPORTED_LANGUAGES.get(user_lang, {}).get("name"),
+            "original": test_text,
+            "translated": translated,
+            "translation_worked": translated != test_text,
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "session_language": user_lang,
+            "original": test_text,
+            "error": str(e),
+        }), 500
 
 
 @app.route("/set_language", methods=["POST"])

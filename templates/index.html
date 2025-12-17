@@ -585,6 +585,11 @@ form.addEventListener("submit", async (e) => {
     const data = await res.json();
     chatContainer.removeChild(typingBubble);
 
+    // Debug: log the full response
+    console.log("Chat response:", data);
+    console.log("Language:", data.language);
+    console.log("Reply:", data.reply);
+
     appendMessage(data.reply || data.error || "No reply", "bot");
   } catch (err) {
     chatContainer.removeChild(typingBubble);
