@@ -18,19 +18,10 @@ APP_BOOT_ID = os.getenv("APP_BOOT_ID") or uuid.uuid4().hex
 # -------------------- KEYS --------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 YELP_API_KEY = os.getenv("YELP_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set")
 if not YELP_API_KEY:
     raise RuntimeError("YELP_API_KEY not set")
-
-# Optional features - warn but don't fail if not set
-if not GEMINI_API_KEY:
-    print("⚠️  GEMINI_API_KEY not set - translation features disabled")
-if not ELEVENLABS_API_KEY:
-    print("⚠️  ELEVENLABS_API_KEY not set - TTS features disabled")
 
 # -------------------- APP --------------------
 app = Flask(__name__)
@@ -82,12 +73,13 @@ SUPPORTED_LANGUAGES = {
 }
 DEFAULT_LANGUAGE = "en"
 
-# ElevenLabs voice IDs (multilingual v2 model supports many languages)
-ELEVENLABS_VOICES = {
-    "Rachel": "21m00Tcm4TlvDq8ikWAM",  # Female, calm
-    "Antoni": "ErXwobaYiN019PkySvjV",  # Male, well-rounded
+# OpenAI TTS voices: alloy, echo, fable, onyx, nova, shimmer
+OPENAI_TTS_VOICES = {
+    "default": "nova",      # Warm, engaging female
+    "male": "onyx",         # Deep male
+    "female": "nova",       # Female
+    "neutral": "alloy",     # Neutral
 }
-ELEVENLABS_MODEL = "eleven_multilingual_v2"
 
 client = OpenAI()
 
@@ -302,14 +294,12 @@ def get_yelp_locale():
     return SUPPORTED_LANGUAGES.get(lang, SUPPORTED_LANGUAGES[DEFAULT_LANGUAGE])["yelp_locale"]
 
 
-# -------------------- TRANSLATION (GEMINI) --------------------
+# -------------------- TRANSLATION (OPENAI) --------------------
 def translate_text(text: str, target_lang: str, source_lang: str = "en") -> str:
     """
-    Translate text using Google's Gemini API.
+    Translate text using OpenAI API.
     Returns original text if translation fails or languages are the same.
     """
-    if not GEMINI_API_KEY:
-        return text
     if not text or not text.strip():
         return text
     if target_lang == source_lang:
@@ -318,50 +308,35 @@ def translate_text(text: str, target_lang: str, source_lang: str = "en") -> str:
     target_name = SUPPORTED_LANGUAGES.get(target_lang, {}).get("name", target_lang)
 
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-
-        prompt = f"""Translate the following text to {target_name}.
-Only return the translated text, nothing else. Keep formatting (line breaks, emojis, etc.) intact.
-If the text contains proper nouns (business names, place names), keep them in their original form.
-
-Text to translate:
-{text}"""
-
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.1,
-                "maxOutputTokens": 2048,
-            }
-        }
-
-        resp = requests.post(url, json=payload, timeout=(5, 30))
-
-        if resp.ok:
-            data = resp.json()
-            candidates = data.get("candidates", [])
-            if candidates:
-                content = candidates[0].get("content", {})
-                parts = content.get("parts", [])
-                if parts:
-                    return parts[0].get("text", text).strip()
-        else:
-            print(f"Gemini translation error: {resp.status_code} - {resp.text[:500]}")
+        response = oai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"You are a translator. Translate the user's text to {target_name}. Only return the translated text, nothing else. Keep formatting (line breaks, emojis, etc.) intact. If the text contains proper nouns (business names, place names), keep them in their original form."
+                },
+                {
+                    "role": "user",
+                    "content": text
+                }
+            ],
+            temperature=0.1,
+            max_tokens=2048,
+        )
+        return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"Translation error: {repr(e)}")
 
     return text
 
 
-# -------------------- TTS (ELEVENLABS) --------------------
+# -------------------- TTS (OPENAI) --------------------
 def generate_tts_audio(text: str, lang: str = "en") -> str | None:
     """
-    Generate TTS audio using ElevenLabs API.
+    Generate TTS audio using OpenAI TTS API.
     Returns the path to the cached audio file, or None if generation fails.
     Uses caching based on text hash to avoid regenerating same audio.
     """
-    if not ELEVENLABS_API_KEY:
-        return None
     if not text or not text.strip():
         return None
 
@@ -380,36 +355,18 @@ def generate_tts_audio(text: str, lang: str = "en") -> str | None:
     if os.path.exists(cache_path):
         return cache_path
 
-    # Get voice for language
-    voice_name = SUPPORTED_LANGUAGES.get(lang, SUPPORTED_LANGUAGES[DEFAULT_LANGUAGE])["tts_voice"]
-    voice_id = ELEVENLABS_VOICES.get(voice_name, ELEVENLABS_VOICES["Rachel"])
-
     try:
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        # Use OpenAI TTS
+        response = oai.audio.speech.create(
+            model="tts-1",
+            voice=OPENAI_TTS_VOICES["default"],
+            input=clean_text[:4096],  # OpenAI has 4096 char limit
+        )
 
-        headers = {
-            "xi-api-key": ELEVENLABS_API_KEY,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-        }
+        # Write audio to cache file
+        response.stream_to_file(cache_path)
+        return cache_path
 
-        payload = {
-            "text": clean_text[:5000],  # ElevenLabs has text limits
-            "model_id": ELEVENLABS_MODEL,
-            "voice_settings": {
-                "stability": 0.5,
-                "similarity_boost": 0.75,
-            }
-        }
-
-        resp = requests.post(url, headers=headers, json=payload, timeout=(5, 60))
-
-        if resp.ok:
-            with open(cache_path, "wb") as f:
-                f.write(resp.content)
-            return cache_path
-        else:
-            print(f"ElevenLabs TTS error: {resp.status_code} - {resp.text[:500]}")
     except Exception as e:
         print(f"TTS generation error: {repr(e)}")
 
@@ -430,114 +387,46 @@ def cleanup_old_tts_cache(max_age_hours: int = 24):
         print(f"Cache cleanup error: {repr(e)}")
 
 
-# -------------------- STT (GEMINI) --------------------
-def transcribe_audio_with_gemini(audio_path: str, lang: str = "en") -> dict:
+# -------------------- STT (OPENAI WHISPER) --------------------
+def transcribe_audio_with_openai(audio_path: str, lang: str = "en") -> dict:
     """
-    Transcribe audio using Google's Gemini API.
-    Gemini 2.0 Flash supports native audio input.
+    Transcribe audio using OpenAI's Whisper API.
     Returns dict with 'text', 'success', and 'detected_language' keys.
     """
-    if not GEMINI_API_KEY:
-        return {"text": "", "success": False, "error": "STT not configured"}
-
     if not os.path.exists(audio_path):
         return {"text": "", "success": False, "error": "Audio file not found"}
 
     try:
-        # Read and encode audio file
-        with open(audio_path, "rb") as f:
-            audio_data = base64.b64encode(f.read()).decode("utf-8")
+        with open(audio_path, "rb") as audio_file:
+            # Use Whisper for transcription
+            transcript = oai.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                response_format="verbose_json",
+            )
 
-        # Determine MIME type based on file extension
-        ext = audio_path.rsplit(".", 1)[-1].lower()
-        mime_types = {
-            "webm": "audio/webm",
-            "mp3": "audio/mpeg",
-            "wav": "audio/wav",
-            "ogg": "audio/ogg",
-            "m4a": "audio/mp4",
+        text = transcript.text.strip() if transcript.text else ""
+
+        # Whisper returns language in verbose_json format
+        detected_lang = getattr(transcript, 'language', 'en') or 'en'
+
+        # Map Whisper's language codes to our supported codes
+        lang_map = {
+            "english": "en", "spanish": "es", "french": "fr", "german": "de",
+            "italian": "it", "portuguese": "pt", "chinese": "zh", "japanese": "ja",
+            "korean": "ko", "hindi": "hi", "arabic": "ar",
         }
-        mime_type = mime_types.get(ext, "audio/webm")
+        detected_lang = lang_map.get(detected_lang.lower(), detected_lang[:2] if len(detected_lang) >= 2 else "en")
 
-        # Build list of supported language names for detection
-        supported_lang_list = ", ".join([f"{code} ({info['name']})" for code, info in SUPPORTED_LANGUAGES.items()])
+        # Validate detected language
+        if detected_lang not in SUPPORTED_LANGUAGES:
+            detected_lang = "en"
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-
-        prompt = f"""Transcribe this audio and detect the spoken language.
-
-Supported languages: {supported_lang_list}
-
-Return ONLY valid JSON in this exact format:
-{{"text": "transcribed text here", "language": "xx"}}
-
-Where "language" is the 2-letter code (en, es, fr, de, it, pt, zh, ja, ko, hi, ar) of the detected spoken language.
-If you cannot understand the audio or it's silent, return: {{"text": "", "language": "en"}}
-Do not include any other text or explanation, just the JSON."""
-
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": mime_type,
-                            "data": audio_data
-                        }
-                    }
-                ]
-            }],
-            "generationConfig": {
-                "temperature": 0.1,
-                "maxOutputTokens": 1024,
-            }
+        return {
+            "text": text,
+            "success": True,
+            "detected_language": detected_lang
         }
-
-        resp = requests.post(url, json=payload, timeout=(5, 60))
-
-        if resp.ok:
-            data = resp.json()
-            candidates = data.get("candidates", [])
-            if candidates:
-                content = candidates[0].get("content", {})
-                parts = content.get("parts", [])
-                if parts:
-                    raw_text = parts[0].get("text", "").strip()
-
-                    # Strip markdown code blocks if present (Gemini often wraps JSON)
-                    if raw_text.startswith("```"):
-                        # Remove ```json or ``` at start and ``` at end
-                        lines = raw_text.split("\n")
-                        if lines[0].startswith("```"):
-                            lines = lines[1:]  # Remove first line
-                        if lines and lines[-1].strip() == "```":
-                            lines = lines[:-1]  # Remove last line
-                        raw_text = "\n".join(lines).strip()
-
-                    # Try to parse as JSON
-                    try:
-                        result = json.loads(raw_text)
-                        text = result.get("text", "").strip()
-                        detected_lang = result.get("language", "en").lower()
-                        # Validate detected language
-                        if detected_lang not in SUPPORTED_LANGUAGES:
-                            detected_lang = "en"
-                        return {
-                            "text": text,
-                            "success": True,
-                            "detected_language": detected_lang
-                        }
-                    except json.JSONDecodeError:
-                        # Fallback: treat entire response as transcribed text
-                        return {
-                            "text": raw_text,
-                            "success": True,
-                            "detected_language": lang  # Keep current language
-                        }
-            return {"text": "", "success": False, "error": "No transcription returned"}
-        else:
-            print(f"Gemini STT error: {resp.status_code} - {resp.text[:500]}")
-            return {"text": "", "success": False, "error": f"API error: {resp.status_code}"}
 
     except Exception as e:
         print(f"STT error: {repr(e)}")
@@ -824,7 +713,7 @@ def chat():
 
     # Translate user message to English for Yelp AI if needed
     message_for_yelp = user_message
-    if user_lang != "en" and GEMINI_API_KEY:
+    if user_lang != "en":
         message_for_yelp = translate_text(user_message, "en", user_lang)
 
     # ✅ inject context from last live scan (server-side reliable)
@@ -844,7 +733,7 @@ def chat():
     reply_text = yelp_resp["text"]
 
     # Translate response to user's language if needed
-    if user_lang != "en" and GEMINI_API_KEY:
+    if user_lang != "en":
         reply_text = translate_text(reply_text, user_lang, "en")
 
     return jsonify({
@@ -905,7 +794,7 @@ def upload_image():
     reply_text = yelp_resp["text"]
 
     # Translate response to user's language if needed
-    if user_lang != "en" and GEMINI_API_KEY:
+    if user_lang != "en":
         reply_text = translate_text(reply_text, user_lang, "en")
 
     return jsonify({
@@ -991,12 +880,12 @@ def live_scan():
 
         # Translate AI text if needed
         yelp_text = yelp_ai.get("text") or ""
-        if user_lang != "en" and GEMINI_API_KEY and yelp_text:
+        if user_lang != "en" and yelp_text:
             yelp_text = translate_text(yelp_text, user_lang, "en")
 
         # Translate AI summary one-liner if available
         if enriched and enriched.get("ai_summary") and enriched["ai_summary"].get("one_liner"):
-            if user_lang != "en" and GEMINI_API_KEY:
+            if user_lang != "en":
                 enriched["ai_summary"]["one_liner"] = translate_text(
                     enriched["ai_summary"]["one_liner"], user_lang, "en"
                 )
@@ -1068,9 +957,9 @@ def get_languages():
     return jsonify({
         "languages": languages,
         "current": current,
-        "translation_enabled": bool(GEMINI_API_KEY),
-        "tts_enabled": bool(ELEVENLABS_API_KEY),
-        "stt_enabled": bool(GEMINI_API_KEY),  # STT uses Gemini
+        "translation_enabled": True,  # Uses OpenAI (always available)
+        "tts_enabled": True,  # Uses OpenAI TTS
+        "stt_enabled": True,  # Uses OpenAI Whisper
     })
 
 
@@ -1101,10 +990,7 @@ def set_language():
 
 @app.route("/tts", methods=["POST"])
 def generate_tts():
-    """Generate TTS audio for given text."""
-    if not ELEVENLABS_API_KEY:
-        return jsonify({"error": "TTS not configured", "tts_enabled": False}), 503
-
+    """Generate TTS audio for given text using OpenAI."""
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
 
@@ -1153,10 +1039,7 @@ def serve_tts_audio(filename):
 
 @app.route("/stt", methods=["POST"])
 def speech_to_text():
-    """Convert speech audio to text using Gemini with language detection."""
-    if not GEMINI_API_KEY:
-        return jsonify({"error": "STT not configured", "stt_enabled": False}), 503
-
+    """Convert speech audio to text using OpenAI Whisper with language detection."""
     f = request.files.get("audio")
     if not f or f.filename == "":
         return jsonify({"error": "No audio provided"}), 400
@@ -1174,7 +1057,7 @@ def speech_to_text():
     user_lang = get_user_language()
 
     try:
-        result = transcribe_audio_with_gemini(save_path, user_lang)
+        result = transcribe_audio_with_openai(save_path, user_lang)
 
         if result["success"]:
             detected_lang = result.get("detected_language", user_lang)
