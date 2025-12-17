@@ -308,7 +308,7 @@ def translate_text(text: str, target_lang: str, source_lang: str = "en") -> str:
     target_name = SUPPORTED_LANGUAGES.get(target_lang, {}).get("name", target_lang)
 
     try:
-        response = oai.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {
@@ -357,7 +357,7 @@ def generate_tts_audio(text: str, lang: str = "en") -> str | None:
 
     try:
         # Use OpenAI TTS
-        response = oai.audio.speech.create(
+        response = client.audio.speech.create(
             model="tts-1",
             voice=OPENAI_TTS_VOICES["default"],
             input=clean_text[:4096],  # OpenAI has 4096 char limit
@@ -399,7 +399,7 @@ def transcribe_audio_with_openai(audio_path: str, lang: str = "en") -> dict:
     try:
         with open(audio_path, "rb") as audio_file:
             # Use Whisper for transcription
-            transcript = oai.audio.transcriptions.create(
+            transcript = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_file,
                 response_format="verbose_json",
