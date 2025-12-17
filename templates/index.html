@@ -137,7 +137,7 @@
               <button id="live-view-more-btn" class="live-view-more-btn">
                 View more in chat
               </button>
-              <button id="live-share-to-group-btn" class="live-share-btn hidden">
+              <button id="live-share-to-group-btn" class="live-share-btn">
                 Share to Group
               </button>
             </div>
@@ -799,19 +799,11 @@ liveScanBtn.addEventListener("click", async () => {
     }
 
     liveResultCard.classList.remove("hidden");
-
-    // Show share button if user is in a group and we have restaurant data
-    if (currentGroupId && (enriched || top)) {
-      liveShareToGroupBtn.classList.remove("hidden");
-    } else {
-      liveShareToGroupBtn.classList.add("hidden");
-    }
   } catch (err) {
     console.error("Live scan error:", err);
     lastLiveResultJson = null;
     liveResultText.textContent = "Error analyzing this view.";
     liveResultCard.classList.remove("hidden");
-    liveShareToGroupBtn.classList.add("hidden");
   } finally {
     liveScanBtn.disabled = false;
     liveScanBtn.textContent = "Scan inside frame";
@@ -822,14 +814,22 @@ liveScanBtn.addEventListener("click", async () => {
 
 // Share to group button handler
 liveShareToGroupBtn.addEventListener("click", async () => {
-  if (!currentGroupId || !lastLiveResultJson) return;
+  if (!currentGroupId) {
+    alert("Join or create a group first to share restaurants!");
+    return;
+  }
+
+  if (!lastLiveResultJson) {
+    alert("Scan a restaurant first!");
+    return;
+  }
 
   const enriched = lastLiveResultJson.enriched;
   const top = lastLiveResultJson.top_pick;
   const restaurant = enriched || top;
 
   if (!restaurant) {
-    alert("No restaurant data to share");
+    alert("No restaurant data to share. Try scanning again.");
     return;
   }
 
