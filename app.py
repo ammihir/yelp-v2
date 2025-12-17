@@ -274,7 +274,7 @@ def transcribe_audio_with_gemini(audio_path: str, lang: str = "en") -> dict:
     """
     Transcribe audio using Google's Gemini API.
     Gemini 2.0 Flash supports native audio input.
-    Returns dict with 'text' and 'success' keys.
+    Returns dict with 'text', 'success', and 'detected_language' keys.
     """
     if not GEMINI_API_KEY:
         return {"text": "", "success": False, "error": "STT not configured"}
@@ -298,13 +298,21 @@ def transcribe_audio_with_gemini(audio_path: str, lang: str = "en") -> dict:
         }
         mime_type = mime_types.get(ext, "audio/webm")
 
-        lang_name = SUPPORTED_LANGUAGES.get(lang, {}).get("name", "English")
+        # Build list of supported language names for detection
+        supported_lang_list = ", ".join([f"{code} ({info['name']})" for code, info in SUPPORTED_LANGUAGES.items()])
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
 
-        prompt = f"""Transcribe this audio to text. The speaker may be speaking in {lang_name} or English.
-Return ONLY the transcribed text, nothing else. No explanations, no quotes, just the spoken words.
-If you cannot understand the audio or it's silent, return an empty string."""
+        prompt = f"""Transcribe this audio and detect the spoken language.
+
+Supported languages: {supported_lang_list}
+
+Return ONLY valid JSON in this exact format:
+{{"text": "transcribed text here", "language": "xx"}}
+
+Where "language" is the 2-letter code (en, es, fr, de, it, pt, zh, ja, ko, hi, ar) of the detected spoken language.
+If you cannot understand the audio or it's silent, return: {{"text": "", "language": "en"}}
+Do not include any other text or explanation, just the JSON."""
 
         payload = {
             "contents": [{
@@ -333,8 +341,27 @@ If you cannot understand the audio or it's silent, return an empty string."""
                 content = candidates[0].get("content", {})
                 parts = content.get("parts", [])
                 if parts:
-                    text = parts[0].get("text", "").strip()
-                    return {"text": text, "success": True}
+                    raw_text = parts[0].get("text", "").strip()
+                    # Try to parse as JSON
+                    try:
+                        result = json.loads(raw_text)
+                        text = result.get("text", "").strip()
+                        detected_lang = result.get("language", "en").lower()
+                        # Validate detected language
+                        if detected_lang not in SUPPORTED_LANGUAGES:
+                            detected_lang = "en"
+                        return {
+                            "text": text,
+                            "success": True,
+                            "detected_language": detected_lang
+                        }
+                    except json.JSONDecodeError:
+                        # Fallback: treat entire response as transcribed text
+                        return {
+                            "text": raw_text,
+                            "success": True,
+                            "detected_language": lang  # Keep current language
+                        }
             return {"text": "", "success": False, "error": "No transcription returned"}
         else:
             print(f"Gemini STT error: {resp.status_code} - {resp.text[:500]}")
@@ -954,7 +981,7 @@ def serve_tts_audio(filename):
 
 @app.route("/stt", methods=["POST"])
 def speech_to_text():
-    """Convert speech audio to text using Gemini."""
+    """Convert speech audio to text using Gemini with language detection."""
     if not GEMINI_API_KEY:
         return jsonify({"error": "STT not configured", "stt_enabled": False}), 503
 
@@ -978,10 +1005,23 @@ def speech_to_text():
         result = transcribe_audio_with_gemini(save_path, user_lang)
 
         if result["success"]:
+            detected_lang = result.get("detected_language", user_lang)
+            language_changed = False
+
+            # Auto-switch language if different from current
+            if detected_lang != user_lang and detected_lang in SUPPORTED_LANGUAGES:
+                session["language"] = detected_lang
+                # Clear chat history for fresh context in new language
+                session.pop("yelp_chat_id", None)
+                session.pop("yelp_live_chat_id", None)
+                language_changed = True
+
             return jsonify({
                 "status": "ok",
                 "text": result["text"],
-                "language": user_lang,
+                "detected_language": detected_lang,
+                "language_changed": language_changed,
+                "language_name": SUPPORTED_LANGUAGES.get(detected_lang, {}).get("name", "English"),
             })
         else:
             return jsonify({

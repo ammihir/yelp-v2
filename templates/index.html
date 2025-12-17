@@ -350,6 +350,16 @@
               // Put transcribed text in input field
               input.value = data.text;
               input.focus();
+
+              // Handle auto language detection
+              if (data.language_changed && data.detected_language) {
+                currentLanguage = data.detected_language;
+                localStorage.setItem("selectedLanguage", data.detected_language);
+                // Update the dropdown
+                languageSelector.value = data.detected_language;
+                // Notify user
+                appendMessage(`Language detected: ${data.language_name}`, "bot");
+              }
             } else if (data.error) {
               console.error("STT error:", data.error);
               appendMessage("Could not understand audio. Please try again.", "bot");
